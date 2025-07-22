@@ -10,6 +10,9 @@ import tabulate
 afh_group=0
 afh_group_count=0
 
+DEFAULT_RX_OK_RATE=0.6
+DEFAULT_TTL=4
+
 def parse_file(input_txt, output_csv):
     # 匹配地址模式：xxxx-yyyy:
     addr_pattern = re.compile(r'[0-9a-fA-F]{4}-[0-9a-fA-F]{4}:', re.IGNORECASE)
@@ -130,7 +133,8 @@ class ChannelStatsArray:
             "inv_rssi_cnt": 0,
             "rx_ok": 0,
             "rx_error": 0,
-            "total": 0
+            "total": 0,
+            "ttl":DEFAULT_TTL
         }
     
     def update(self, item: 'channel_assess') -> None:
@@ -153,7 +157,19 @@ class ChannelStatsArray:
             stats["total"] += 1                     
         else:
             raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
-    
+        self._sorted_array = sorted(
+                [stats for stats in self._array if stats["total"] > 0],
+                key=lambda x: self.get_rx_ok_rate(x["channel"]),
+                reverse=True
+            )
+            
+    def get_channel_stats(self, channel: int) -> dict:
+        """获取指定信道的统计信息"""
+        if 0 <= channel <= self._max_channel:
+            return self._array[channel]
+        else:
+            raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
+            
     def get(self, channel: int) -> dict:
         """获取指定信道的统计数据"""
         self._check_channel(channel)
@@ -164,11 +180,37 @@ class ChannelStatsArray:
         stats = self.get(channel)
         count = stats["valid_rssi_cnt"]
         return stats["rssi"] / count if count > 0 else 0
-    
+
+    def get_rx_ok_rate(self, channel: int) -> float:
+        """计算指定信道的接收成功率"""
+        stats = self.get_channel_stats(channel)
+        if stats["total"] > 0:
+            return stats["rx_ok"] / stats["total"]
+        else:
+            return DEFAULT_RX_OK_RATE
+        return 0
+        
     def get_all_channels(self) -> list[dict]:
         """获取所有信道的统计数据"""
         return [stats for stats in self._array if stats["valid_rssi_cnt"] > 0 or stats["inv_rssi_cnt"] > 0]
-    
+
+    def clear_low_access_channels(self) -> int:
+        """
+        清空总访问次数为1的信道统计数据
+        
+        Returns:
+            被清空的信道数量
+        """
+        cleared_count = 0
+        
+        for channel in range(self._max_channel + 1):
+            stats = self.get(channel)
+            if stats["total"] == 1:
+                self.clear(channel)
+                cleared_count += 1
+        
+        return cleared_count    
+        
     def sort_by(self, field: str, reverse: bool = False) -> list[dict]:
         """
         按指定字段对信道统计数据进行排序
@@ -181,7 +223,7 @@ class ChannelStatsArray:
             排序后的统计数据列表
         """
         # 检查字段是否有效
-        valid_fields = {'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi'}
+        valid_fields = {'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi', 'rx_ok_rate'}
         if field not in valid_fields:
             raise ValueError(f"Invalid sort field: {field}. Valid fields are {valid_fields}")
         
@@ -194,6 +236,10 @@ class ChannelStatsArray:
             return sorted(channels, 
                          key=lambda x: x['rssi'] / x['valid_rssi_cnt'] if x['valid_rssi_cnt'] > 0 else 0, 
                          reverse=reverse)
+        elif field == 'rx_ok_rate':    
+            return sorted(channels, 
+                         key=lambda x: x['rx_ok'] / x['total'] if x['total'] > 0 else DEFAULT_RX_OK_RATE, 
+                         reverse=reverse)            
         else:
             # 按普通字段排序
             return sorted(channels, key=lambda x: x[field], reverse=reverse)
@@ -262,36 +308,55 @@ class ChannelStatsArray:
         
     def update_from_history(self, history: 'ChannelStatsArray', overwrite_all: bool = False) -> None:
         """
-        将当前实例的数据更新为历史记录的状态，选择性保留当前信道
+        将历史统计数据合并到当前实例，累加所有统计值而非覆盖
         
         Args:
-            history: 历史记录的 ChannelStatsArray 对象
-            overwrite_all: 是否覆盖所有信道（包括历史中不存在的），默认为 False
-        """
-        if not isinstance(history, ChannelStatsArray):
-            raise TypeError("History must be a ChannelStatsArray object")
-        
+            history: 历史记录的 ChannelStatisticsManager 对象
+            overwrite_all: 是否更新所有信道，即使历史数据中不存在，默认为 False
+        """        
         if self._max_channel != history._max_channel:
             raise ValueError("Cannot update from history with different max_channel")
         
         if overwrite_all:
-            # 完全覆盖模式：清空当前数据，复制全部历史数据
+            # 合并所有信道数据
             for i in range(self._max_channel + 1):
-                self._array[i] = history._array[i].copy()
+                self._merge_channel_stats(i, history._array[i])
         else:
-            # 选择性更新模式：仅更新历史中存在的信道
-            historical_channels = history.get_active_channels()
-            for channel in historical_channels:
-                self._array[channel] = history._array[channel].copy()
+            # 仅合并历史中存在的活跃信道
+            for channel_stats in history._array:
+                if channel_stats["total"] > 0:  # 只处理有数据的信道
+                    self._merge_channel_stats(channel_stats["channel"], channel_stats)
+                    
+            # 重置所有历史中不存在的信道
+            for channel in range(self._max_channel + 1):
+                current = self._array[channel]
+                if current['channel'] not in history.get_active_channels():
+                    if (current['ttl']>0):
+                        current['ttl']=current['ttl']-1
+                    else:
+                        self._array[channel] = self._create_default_stats(channel)                    
+                
+        self._sort_required = True  # 合并后需要重新排序
 
-    def print_stats(self, format: str = 'table', detailed: bool = False, sort_by: str = 'channel') -> None:
+    def _merge_channel_stats(self, channel: int, history_stats: dict) -> None:
+        """合并单个信道的统计数据"""
+        current = self._array[channel]
+        current["rssi"] += history_stats["rssi"]
+        current["valid_rssi_cnt"] += history_stats["valid_rssi_cnt"]
+        current["inv_rssi_cnt"] += history_stats["inv_rssi_cnt"]
+        current["rx_ok"] += history_stats["rx_ok"]
+        current["rx_error"] += history_stats["rx_error"]
+        current["total"] += history_stats["total"]
+        current["ttl"] = history_stats["ttl"]
+
+    def print_stats(self, format: str = 'table', detailed: bool = False, sort_by: str = 'rx_ok_rate') -> None:
         """
         打印信道统计信息
         
         Args:
             format: 输出格式，支持 'table' (表格), 'csv' (逗号分隔值), 'json' (JSON格式)
             detailed: 是否显示详细信息，默认为 False
-            sort_by: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi'
+            sort_by: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi', 'rx_ok_rate'
         """
         channels = self.sort_by(sort_by)
         
@@ -393,7 +458,7 @@ class ChannelStatsArray:
         
         print(json.dumps(output, indent=2))    
                 
-    def print_all_with_selected(self, selected_channels: list, format: str = 'table', detailed: bool = False, sort_by: str = 'channel') -> None:
+    def print_all_with_selected(self, selected_channels: list, format: str = 'table', detailed: bool = False, sort_by: str = 'rx_ok_rate') -> None:
         """
         打印所有有数据的信道，并标记选中的信道
         
@@ -430,7 +495,7 @@ class ChannelStatsArray:
     def _print_table_with_mark(self, channels: list[dict], selected: list, detailed: bool) -> None:
         """带选中标记的表格打印（内部方法）"""
         # 表头添加标记列
-        headers = ["Selected", "Channel", "Avg RSSI (dBm)", "Valid RSSI", "Invalid RSSI", "Rx OK", "Rx Error", "Total"]
+        headers = ["Selected", "Channel", "Avg RSSI (dBm)", "Valid RSSI", "Invalid RSSI", "Rx OK", "Rx Error", "Total", "ttl"]
         if detailed:
             headers.extend(["RSSI Sum", "Success Rate"])
         
@@ -450,7 +515,8 @@ class ChannelStatsArray:
                 stats["inv_rssi_cnt"],
                 stats["rx_ok"],
                 stats["rx_error"],
-                stats["total"]
+                stats["total"],
+                stats["ttl"]
             ]
             
             if detailed:
@@ -628,25 +694,25 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line):
     stats_array = ChannelStatsArray(max_channel=79)    
     for i in channels:
         stats_array.update(i)
-
-    added_array, removed_array, kept_array=last_array.compare(stats_array)
+    stats_array.clear_low_access_channels()
+   
+    added_array, removed_array, kept_array=last_array.compare(stats_array)    
     added_array = sorted(added_array)
     removed_array = sorted(removed_array)
     print("Removed ", end="")
     print(removed_array)
     print("Channel up to date history")
-    hist_array.print_all_with_selected(added_array)
+    hist_array.print_all_with_selected(added_array, detailed=True)
     print("Added: ", end="")
     print(added_array)
     kept_array = sorted(kept_array)
     print("kept_array ", end="")
     print(kept_array)
-    print("=======================================================================================")
-    
+    print("=======================================================================================")    
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
-    stats_array.print_stats()
+    stats_array.print_stats(detailed=True)
     
             
 last_array = ChannelStatsArray(max_channel=79)
