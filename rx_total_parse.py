@@ -2,7 +2,13 @@ import csv
 import re
 import sys
 import math
+from dataclasses import dataclass
+from collections import defaultdict
+from typing import List, Optional, Union
+import tabulate
 
+afh_group=0
+afh_group_count=0
 
 def parse_file(input_txt, output_csv):
     # 匹配地址模式：xxxx-yyyy:
@@ -12,21 +18,23 @@ def parse_file(input_txt, output_csv):
     
     time_pattern = re.compile(r'[0-9]{2}\:[0-9]{2}:[0-9]{2}\:[0-9]{3}', re.IGNORECASE)
     
-    global group_counter
+    global group_counter, afh_group, afh_group_count
     # 状态管理
     active_block = False    # 是否在数据块中
     total_groups = 0        # 预期的总组数
     collected_bytes = []    # 收集到的所有字节
     group_counter = 1       # 当前分组计数
-
     with open(input_txt, 'r') as infile, open(output_csv, 'w', newline='') as outfile:
         writer = csv.writer(outfile)
-        writer.writerow(['index', 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
+        writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
         
-        for line in infile:
+        for line_number, line in enumerate(infile, start = 1):
             # 检测块开始：行中包含"D/HEX sco rssi:"
             if "D/HEX rx total:" in line:
                 # 结束前一个块（如果未完成）
+                print(line_number, "Evaluate Above--------------------")
+                afh_group_count=0;
+                afh_group = afh_group + 1
                 if active_block and len(collected_bytes) >= 2:
                     process_block(collected_bytes, total_groups, writer, timestr_in_line)
                 
@@ -77,25 +85,340 @@ def parse_file(input_txt, output_csv):
         if active_block and len(collected_bytes) >= 2:
             process_block(collected_bytes, total_groups, writer, timestr_in_line)
 
+@dataclass
+class channel_assess:
+    channel: int
+    afh_group: int
+    timestr_in_line: str
+    rssi: int
+    is_audio: int
+    rx_ok: int
+    sync_err: int
+    hec_err: int
+    guard_err: int
+    crc_err: int
+    other_err: int
+
+class ChannelStatsArray:
+    """基于信道编号索引的固定大小统计数组"""
+    
+    def __init__(self, max_channel: int):
+        """
+        初始化固定大小的信道统计数组
+        
+        Args:
+            max_channel: 最大信道编号（决定数组大小）
+        """
+        self._max_channel = max_channel
+        self._array = [self._create_default_stats(channel) for channel in range(max_channel + 1)]
+
+    def __iter__(self):
+        """使对象可迭代，返回所有有数据的信道统计"""
+        return iter(self.get_all_channels())
+    
+    def items(self):
+        """返回 (channel, stats) 形式的迭代器"""
+        for stats in self.get_all_channels():
+            yield stats["channel"], stats
+        
+    def _create_default_stats(self, channel: int) -> dict:
+        """创建默认的统计数据结构"""
+        return {
+            "channel": channel,
+            "rssi": 0,
+            "valid_rssi_cnt": 0,
+            "inv_rssi_cnt": 0,
+            "rx_ok": 0,
+            "rx_error": 0,
+            "total": 0
+        }
+    
+    def update(self, item: 'channel_assess') -> None:
+        """更新指定信道的统计数据"""
+        channel = item.channel
+        if 0 <= channel <= self._max_channel:
+            stats = self._array[channel]
+            # 更新 RSSI 统计
+            if item.sync_err==0 :  
+                stats["rssi"] += item.rssi
+                stats["valid_rssi_cnt"] += 1
+            else:
+                stats["inv_rssi_cnt"] += 1
+            
+            # 更新接收状态统计
+            stats["rx_ok"] += item.rx_ok
+            stats["rx_error"] += (item.hec_err + 
+                                 item.guard_err + item.crc_err + 
+                                 item.other_err)
+            stats["total"] += 1                     
+        else:
+            raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
+    
+    def get(self, channel: int) -> dict:
+        """获取指定信道的统计数据"""
+        self._check_channel(channel)
+        return self._array[channel]
+    
+    def get_average_rssi(self, channel: int) -> float:
+        """计算指定信道的平均 RSSI"""
+        stats = self.get(channel)
+        count = stats["valid_rssi_cnt"]
+        return stats["rssi"] / count if count > 0 else 0
+    
+    def get_all_channels(self) -> list[dict]:
+        """获取所有信道的统计数据"""
+        return [stats for stats in self._array if stats["valid_rssi_cnt"] > 0 or stats["inv_rssi_cnt"] > 0]
+    
+    def sort_by(self, field: str, reverse: bool = False) -> list[dict]:
+        """
+        按指定字段对信道统计数据进行排序
+        
+        Args:
+            field: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error'
+            reverse: 是否降序排列，默认为升序
+        
+        Returns:
+            排序后的统计数据列表
+        """
+        # 检查字段是否有效
+        valid_fields = {'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi'}
+        if field not in valid_fields:
+            raise ValueError(f"Invalid sort field: {field}. Valid fields are {valid_fields}")
+        
+        # 获取所有有数据的信道
+        channels = self.get_all_channels()
+        
+        # 根据不同字段进行排序
+        if field == 'average_rssi':
+            # 特殊处理：按平均 RSSI 排序
+            return sorted(channels, 
+                         key=lambda x: x['rssi'] / x['valid_rssi_cnt'] if x['valid_rssi_cnt'] > 0 else 0, 
+                         reverse=reverse)
+        else:
+            # 按普通字段排序
+            return sorted(channels, key=lambda x: x[field], reverse=reverse)
+    
+    def clear(self, channel: int) -> None:
+        """清空指定信道的统计数据"""
+        self._check_channel(channel)
+        self._array[channel] = self._create_default_stats(channel)
+    
+    def clear_all(self) -> None:
+        """清空所有统计数据"""
+        self._array = [self._create_default_stats(channel) for channel in range(self._max_channel + 1)]
+    
+    def _check_channel(self, channel: int) -> None:
+        """检查信道是否越界"""
+        if not (0 <= channel <= self._max_channel):
+            raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
+            
+    def get_active_channels(self) -> set:
+        """获取所有有数据的信道编号集合"""
+        return {stats["channel"] for stats in self.get_all_channels()}
+    
+    def compare(self, other: 'ChannelStatsArray') -> tuple:
+        """
+        比较两个 ChannelStatsArray，返回新增、移除和保留的信道
+        
+        Args:
+            other: 另一个 ChannelStatsArray 对象
+        
+        Returns:
+            元组 (added_channels, removed_channels, kept_channels)
+                - added_channels: 新增的信道集合（other 有而 self 没有）
+                - removed_channels: 移除的信道集合（self 有而 other 没有）
+                - kept_channels: 保留的信道集合（两者都有）
+        """
+        if not isinstance(other, ChannelStatsArray):
+            raise TypeError("Comparison must be between two ChannelStatsArray objects")
+        
+        current_channels = self.get_active_channels()
+        other_channels = other.get_active_channels()
+        
+        added = other_channels - current_channels  # other 比 self 多的信道
+        removed = current_channels - other_channels  # self 比 other 多的信道
+        kept = current_channels & other_channels  # 两者共有的信道
+        
+        return added, removed, kept
+        
+    def print_channel_numbers(self, sort: bool = True) -> None:
+        """
+        仅打印有数据的信道编号
+        
+        Args:
+            sort: 是否按信道编号排序，默认为 True
+        """
+        channels = self.get_active_channels()
+        
+        if not channels:
+            print("No active channels found.")
+            return
+        
+        if sort:
+            channels = sorted(channels)
+        
+        print("Active Channels:", end=" ")
+        print(*channels, sep=", ")
+        
+    def update_from_history(self, history: 'ChannelStatsArray', overwrite_all: bool = False) -> None:
+        """
+        将当前实例的数据更新为历史记录的状态，选择性保留当前信道
+        
+        Args:
+            history: 历史记录的 ChannelStatsArray 对象
+            overwrite_all: 是否覆盖所有信道（包括历史中不存在的），默认为 False
+        """
+        if not isinstance(history, ChannelStatsArray):
+            raise TypeError("History must be a ChannelStatsArray object")
+        
+        if self._max_channel != history._max_channel:
+            raise ValueError("Cannot update from history with different max_channel")
+        
+        if overwrite_all:
+            # 完全覆盖模式：清空当前数据，复制全部历史数据
+            for i in range(self._max_channel + 1):
+                self._array[i] = history._array[i].copy()
+        else:
+            # 选择性更新模式：仅更新历史中存在的信道
+            historical_channels = history.get_active_channels()
+            for channel in historical_channels:
+                self._array[channel] = history._array[channel].copy()
+
+    def print_stats(self, format: str = 'table', detailed: bool = False, sort_by: str = 'channel') -> None:
+        """
+        打印信道统计信息
+        
+        Args:
+            format: 输出格式，支持 'table' (表格), 'csv' (逗号分隔值), 'json' (JSON格式)
+            detailed: 是否显示详细信息，默认为 False
+            sort_by: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi'
+        """
+        channels = self.sort_by(sort_by)
+        
+        if not channels:
+            print("No channel statistics available.")
+            return
+        
+        if format == 'table':
+            self._print_table(channels, detailed)
+        elif format == 'csv':
+            self._print_csv(channels, detailed)
+        elif format == 'json':
+            self._print_json(channels, detailed)
+        else:
+            raise ValueError(f"Unsupported format: {format}. Valid formats are 'table', 'csv', 'json'.")
+    
+    def _print_table(self, channels: list[dict], detailed: bool) -> None:
+        """以表格形式打印统计信息"""
+        from tabulate import tabulate
+        
+        headers = ["Channel", "Avg RSSI (dBm)", "Rx OK", "Valid RSSI", "Invalid RSSI", "Rx Error", "Total"]
+        if detailed:
+            headers.extend(["RSSI Sum", "Success Rate"])
+        
+        table = []
+        for stats in channels:
+            avg_rssi = self.get_average_rssi(stats["channel"])
+            success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
+            
+            row = [
+                stats["channel"],
+                f"{avg_rssi:.2f}",
+                stats["rx_ok"],
+                stats["valid_rssi_cnt"],
+                stats["inv_rssi_cnt"],
+                stats["rx_error"],
+                stats["total"]
+            ]
+            
+            if detailed:
+                row.extend([stats["rssi"], f"{success_rate:.2f}%"])
+            
+            table.append(row)
+        
+        print(tabulate(table, headers=headers, tablefmt="grid"))
+    
+    def _print_csv(self, channels: list[dict], detailed: bool) -> None:
+        """以CSV格式打印统计信息"""
+        import csv
+        import sys
+        
+        headers = ["channel", "average_rssi", "valid_rssi_cnt", "inv_rssi_cnt", "rx_ok", "rx_error", "total"]
+        if detailed:
+            headers.extend(["rssi_sum", "success_rate"])
+        
+        writer = csv.DictWriter(sys.stdout, fieldnames=headers)
+        writer.writeheader()
+        
+        for stats in channels:
+            row = {
+                "channel": stats["channel"],
+                "average_rssi": self.get_average_rssi(stats["channel"]),
+                "valid_rssi_cnt": stats["valid_rssi_cnt"],
+                "inv_rssi_cnt": stats["inv_rssi_cnt"],
+                "rx_ok": stats["rx_ok"],
+                "rx_error": stats["rx_error"],
+                "total": stats["total"]
+            }
+            
+            if detailed:
+                success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
+                row["rssi_sum"] = stats["rssi"]
+                row["success_rate"] = success_rate
+            
+            writer.writerow(row)
+    
+    def _print_json(self, channels: list[dict], detailed: bool) -> None:
+        """以JSON格式打印统计信息"""
+        import json
+        
+        output = []
+        for stats in channels:
+            channel_data = {
+                "channel": stats["channel"],
+                "average_rssi": self.get_average_rssi(stats["channel"]),
+                "valid_rssi_cnt": stats["valid_rssi_cnt"],
+                "inv_rssi_cnt": stats["inv_rssi_cnt"],
+                "rx_ok": stats["rx_ok"],
+                "rx_error": stats["rx_error"],
+                "total": stats["total"]
+            }
+            
+            if detailed:
+                success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
+                channel_data["rssi_sum"] = stats["rssi"]
+                channel_data["success_rate"] = success_rate
+            
+            output.append(channel_data)
+        
+        print(json.dumps(output, indent=2))    
+                
+                
 def process_block(bytes_list, total_groups, writer, timestr_in_line):
     """处理一个完整数据块并写入CSV"""
     # 验证数据有效性
-    global group_counter
+    channels=[]
+    global group_counter, afh_group, afh_group_count
+    global last_array, hist_array
+    
     if total_groups == 0 or len(bytes_list) < 2:
+        print("Invalid total_groups or bytes_list")
         return
     
     # 计算预期总字节数 = 2(组数字节) + total_groups * 4
     expected_bytes = 2 + total_groups * 4
 
     if len(bytes_list) < expected_bytes:
-        return  # 数据不完整
-    
+        print("Not enought data,", len(bytes_list), "<", expected_bytes)
+        expected_bytes=len(bytes_list)
+        #return  # 数据不完整    
 
     # 跳过前2个组数字节，从第3个字节开始
     data_bytes = bytes_list[2:expected_bytes]
     
     # 验证数据长度是4的倍数
     if len(data_bytes) % 4 != 0:
+        print("Length error")
         return
     
 
@@ -130,9 +453,10 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line):
             other_err = 1
         else:
             rx_ok = 1
-        
+        afh_group_count=afh_group_count+1
         writer.writerow([
-            group_counter, 
+            group_counter,
+            afh_group,    
             index_range,
             timestr_in_line,
             channel,
@@ -146,9 +470,40 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line):
             crc_err,
             other_err,
         ])
+        channels.append(channel_assess(
+            channel,
+            afh_group,
+            timestr_in_line,
+            rssi,
+            is_audio,
+            rx_ok,
+            sync_err,
+            hec_err,
+            guard_err,
+            crc_err,
+            other_err,               
+        ))
         group_counter += 1
-                
+    
+    stats_array = ChannelStatsArray(max_channel=79)    
+    for i in channels:
+        stats_array.update(i)
 
+    added_array, removed_array, kept_array=last_array.compare(stats_array)
+    added_array = sorted(added_array)
+    removed_array = sorted(removed_array)
+    print("Removed ", end="")
+    print(removed_array)
+    print("Added: ", end="")
+    print(added_array)
+    kept_array = sorted(kept_array)
+    print("kept_array ", end="")
+    print(kept_array)
+    last_array=stats_array    
+    stats_array.print_stats()
+            
+last_array = ChannelStatsArray(max_channel=99)
+hist_array = ChannelStatsArray(max_channel=99)
 
 if __name__ == "__main__":
     
