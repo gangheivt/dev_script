@@ -32,7 +32,7 @@ def parse_file(input_txt, output_csv):
             # 检测块开始：行中包含"D/HEX sco rssi:"
             if "D/HEX rx total:" in line:
                 # 结束前一个块（如果未完成）
-                print(line_number, "Evaluate Above--------------------")
+                print(line_number, "Evaluate Above--------------------^^")
                 afh_group_count=0;
                 afh_group = afh_group + 1
                 if active_block and len(collected_bytes) >= 2:
@@ -393,7 +393,147 @@ class ChannelStatsArray:
         
         print(json.dumps(output, indent=2))    
                 
-                
+    def print_all_with_selected(self, selected_channels: list, format: str = 'table', detailed: bool = False, sort_by: str = 'channel') -> None:
+        """
+        打印所有有数据的信道，并标记选中的信道
+        
+        Args:
+            selected_channels: 需要标记的选中信道列表
+            format: 输出格式，支持 'table' (表格), 'csv' (逗号分隔值), 'json' (JSON格式)
+            detailed: 是否显示详细信息，默认为 False
+            sort_by: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi'
+        """
+        # 获取所有有数据的信道并排序
+        all_channels = self.sort_by(sort_by)
+        
+        if not all_channels:
+            print("No channel statistics available.")
+            return
+        
+        # 验证选中的信道是否有效
+        valid_selected = [ch for ch in selected_channels if 0 <= ch <= self._max_channel]
+        invalid_selected = [ch for ch in selected_channels if not (0 <= ch <= self._max_channel)]
+        
+        if invalid_selected:
+            print(f"Warning: Invalid selected channel(s) (out of range [0, {self._max_channel}]): {invalid_selected}")
+        
+        # 根据格式处理输出
+        if format == 'table':
+            self._print_table_with_mark(all_channels, valid_selected, detailed)
+        elif format == 'csv':
+            self._print_csv_with_mark(all_channels, valid_selected, detailed)
+        elif format == 'json':
+            self._print_json_with_mark(all_channels, valid_selected, detailed)
+        else:
+            raise ValueError(f"Unsupported format: {format}. Valid formats are 'table', 'csv', 'json'.")
+
+    def _print_table_with_mark(self, channels: list[dict], selected: list, detailed: bool) -> None:
+        """带选中标记的表格打印（内部方法）"""
+        # 表头添加标记列
+        headers = ["Selected", "Channel", "Avg RSSI (dBm)", "Valid RSSI", "Invalid RSSI", "Rx OK", "Rx Error", "Total"]
+        if detailed:
+            headers.extend(["RSSI Sum", "Success Rate"])
+        
+        table = []
+        for stats in channels:
+            # 判断是否为选中信道（添加标记）
+            mark = "*" if stats["channel"] in selected else " "
+            
+            avg_rssi = self.get_average_rssi(stats["channel"])
+            success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
+            
+            row = [
+                mark,  # 选中标记列
+                stats["channel"],
+                f"{avg_rssi:.2f}",
+                stats["valid_rssi_cnt"],
+                stats["inv_rssi_cnt"],
+                stats["rx_ok"],
+                stats["rx_error"],
+                stats["total"]
+            ]
+            
+            if detailed:
+                row.extend([stats["rssi"], f"{success_rate:.2f}%"])
+            
+            table.append(row)
+        
+        # 尝试使用tabulate打印，否则使用纯Python实现
+        try:
+            from tabulate import tabulate
+            print(tabulate(table, headers=headers, tablefmt="grid"))
+        except ImportError:
+            # 纯Python表格实现（带标记）
+            column_widths = [max(len(str(row[i])) for row in [headers] + table) for i in range(len(headers))]
+            separator = "+" + "+".join("-" * (w + 2) for w in column_widths) + "+"
+            
+            print(separator)
+            print("| " + " | ".join(f"{h:{w}}" for h, w in zip(headers, column_widths)) + " |")
+            print(separator)
+            
+            for row in table:
+                print("| " + " | ".join(f"{str(cell):{w}}" for cell, w in zip(row, column_widths)) + " |")
+            
+            print(separator)
+            print("* Indicates selected channels")  # 标记说明
+
+    def _print_csv_with_mark(self, channels: list[dict], selected: list, detailed: bool) -> None:
+        """带选中标记的CSV打印（内部方法）"""
+        import csv
+        import sys
+        
+        headers = ["is_selected", "channel", "average_rssi", "valid_rssi_cnt", "inv_rssi_cnt", "rx_ok", "rx_error", "total"]
+        if detailed:
+            headers.extend(["rssi_sum", "success_rate"])
+        
+        writer = csv.DictWriter(sys.stdout, fieldnames=headers)
+        writer.writeheader()
+        
+        for stats in channels:
+            row = {
+                "is_selected": "TRUE" if stats["channel"] in selected else "FALSE",
+                "channel": stats["channel"],
+                "average_rssi": self.get_average_rssi(stats["channel"]),
+                "valid_rssi_cnt": stats["valid_rssi_cnt"],
+                "inv_rssi_cnt": stats["inv_rssi_cnt"],
+                "rx_ok": stats["rx_ok"],
+                "rx_error": stats["rx_error"],
+                "total": stats["total"]
+            }
+            
+            if detailed:
+                success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
+                row["rssi_sum"] = stats["rssi"]
+                row["success_rate"] = success_rate
+            
+            writer.writerow(row)
+
+    def _print_json_with_mark(self, channels: list[dict], selected: list, detailed: bool) -> None:
+        """带选中标记的JSON打印（内部方法）"""
+        import json
+        
+        output = []
+        for stats in channels:
+            channel_data = {
+                "is_selected": stats["channel"] in selected,
+                "channel": stats["channel"],
+                "average_rssi": self.get_average_rssi(stats["channel"]),
+                "valid_rssi_cnt": stats["valid_rssi_cnt"],
+                "inv_rssi_cnt": stats["inv_rssi_cnt"],
+                "rx_ok": stats["rx_ok"],
+                "rx_error": stats["rx_error"],
+                "total": stats["total"]
+            }
+            
+            if detailed:
+                success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
+                channel_data["rssi_sum"] = stats["rssi"]
+                channel_data["success_rate"] = success_rate
+            
+            output.append(channel_data)
+        
+        print(json.dumps(output, indent=2))
+            
 def process_block(bytes_list, total_groups, writer, timestr_in_line):
     """处理一个完整数据块并写入CSV"""
     # 验证数据有效性
@@ -494,16 +634,23 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line):
     removed_array = sorted(removed_array)
     print("Removed ", end="")
     print(removed_array)
+    print("Channel up to date history")
+    hist_array.print_all_with_selected(added_array)
     print("Added: ", end="")
     print(added_array)
     kept_array = sorted(kept_array)
     print("kept_array ", end="")
     print(kept_array)
+    print("=======================================================================================")
+    
+    
+    hist_array.update_from_history(stats_array)
     last_array=stats_array    
     stats_array.print_stats()
+    
             
-last_array = ChannelStatsArray(max_channel=99)
-hist_array = ChannelStatsArray(max_channel=99)
+last_array = ChannelStatsArray(max_channel=79)
+hist_array = ChannelStatsArray(max_channel=79)
 
 if __name__ == "__main__":
     
