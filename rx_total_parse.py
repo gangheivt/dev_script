@@ -13,6 +13,65 @@ afh_group_count=0
 DEFAULT_RX_OK_RATE=0.6
 DEFAULT_TTL=4
 
+def parse_afh_log_line(log_line):
+    # 修改正则表达式模式，匹配0000-0020:之后的所有十六进制数据
+    pattern = r'0000-0020:\s+((?:[0-9A-F]{2}\s+)+)'
+    match = re.search(pattern, log_line)
+    
+    if match:
+        # 提取匹配到的十六进制字符串
+        hex_str = match.group(1).strip()
+        # 将十六进制字符串分割成单个十六进制值
+        hex_values = hex_str.split()
+        # 转换为整数数组
+        result = [int(value, 16) for value in hex_values]
+        return result
+    else:
+        print("未找到匹配的0000-0020数据模式")
+        return []
+
+def parse_afh_map(bytes_array: list) -> list:
+    """
+    解析蓝牙AFH map字节数组，返回可用信道列表
+    
+    参数:
+    bytes_array (list): 包含AFH map的字节数组，如 [0xBB, 0x76, 0xA4, 0x00, ...]
+    
+    返回:
+    list: 可用信道号码列表（从0开始）
+    """
+    # 初始化AFH映射数组
+    afh_map = []
+    
+    # 遍历每个字节，转换为8位二进制数组（低位在前）
+    for byte in bytes_array:
+        for i in range(8):  # 从低位到高位处理每个位
+            afh_map.append((byte >> i) & 1)  # 提取第i位的值
+    
+    # 提取所有可用信道的号码（值为1的索引）
+    used_channels = [i for i, bit in enumerate(afh_map) if bit == 1]
+    
+    return used_channels
+
+def print_afh_channels(used_channels: list, group_size: int = 40) -> None:
+    """
+    格式化打印AFH map中使用的信道号码
+    
+    参数:
+    used_channels (list): 可用信道列表
+    group_size (int): 每组显示的信道数量，默认为20
+    """
+    print("AFH map中使用的信道号码：")
+    for i in range(0, len(used_channels), group_size):
+        # 计算当前组的起始和结束序号（从1开始计数）
+        start = i // group_size * group_size + 1
+        end = min(start + group_size - 1, len(used_channels))
+        print(f"信道 {start}-{end}: {used_channels[i:i+group_size]}")
+    
+    # 统计并打印摘要
+    total_channels = len(used_channels)
+    print(f"\n总可用信道数：{total_channels}")
+    
 def parse_file(input_txt, output_csv):
     # 匹配地址模式：xxxx-yyyy:
     addr_pattern = re.compile(r'[0-9a-fA-F]{4}-[0-9a-fA-F]{4}:', re.IGNORECASE)
@@ -83,7 +142,16 @@ def parse_file(input_txt, output_csv):
                 byte_str = line[addr_match.end():]
                 bytes_in_line = byte_pattern.findall(byte_str)
                 collected_bytes.extend(bytes_in_line)
-        
+            if "D/HEX afh_ch_map:" in line:
+                print("AFH map: ", end="")
+                afh_info=parse_afh_log_line(line)
+                afh_map=afh_info[4:14]
+                afh_suggest=afh_info[14:24]
+                used_channels=parse_afh_map(afh_map)
+                print_afh_channels(used_channels)
+                print("Remote：", end="")
+                used_channels=parse_afh_map(afh_suggest)
+                print_afh_channels(used_channels)                
         # 处理文件末尾的数据块
         if active_block and len(collected_bytes) >= 2:
             process_block(collected_bytes, total_groups, writer, timestr_in_line)
