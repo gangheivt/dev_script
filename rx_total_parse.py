@@ -5,14 +5,23 @@ import math
 from dataclasses import dataclass
 from collections import defaultdict
 from typing import List, Optional, Union
-import tabulate
+from tabulate import tabulate
 
 afh_group=0
 afh_group_count=0
+afh_error_rate=0.0
 
 DEFAULT_RX_OK_RATE=0.4
 DEFAULT_TTL=3
 
+class error_rate_cls:
+    def __init__(self, rssi, error_rate):
+        self.rssi = rssi
+        self.error_rate = error_rate
+    
+    def __lt__(self, other):
+        return self.rssi < other.rssi
+        
 def update_average_dbm(existing_avg_dbm: float, existing_count: int, 
                        new_avg_dbm: float, new_count: int) -> float:
     """
@@ -156,6 +165,11 @@ def parse_file(input_txt, output_csv):
     total_groups = 0        # 预期的总组数
     collected_bytes = []    # 收集到的所有字节
     group_counter = 1       # 当前分组计数
+    
+    current_total=0
+    current_error=0
+    last_total=0;
+    last_error=0;
     with open(input_txt, 'r') as infile, open(output_csv, 'w', newline='') as outfile:
         writer = csv.writer(outfile)
         writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
@@ -224,7 +238,15 @@ def parse_file(input_txt, output_csv):
                 print("Good channels (indexes):", good)
                 print("Bad channels (indexes):", bad)
                 print("Unknown channels (indexes):", unknown)
-
+                
+            if "afh_sco_data_stats" in line:
+                global afh_error_rate
+                words = re.split(r'[,\s]+', line)
+                current_total = int(words[3])
+                current_error = int(words[4])
+                afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
+                last_total=current_total
+                last_error=current_error
         # 处理文件末尾的数据块
         if active_block and len(collected_bytes) >= 2:
             process_block(collected_bytes, total_groups, writer, timestr_in_line)
@@ -324,8 +346,18 @@ class ChannelStatsArray:
     
     def get_average_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
-        stats = self.get(channel)
-        return stats["rssi"]
+        if (channel<0):
+            total_mw=0
+            total_cnt=0
+            for i in self._array:
+                total_mw += (10 ** (i["rssi"] / 10)) * i["valid_rssi_cnt"]
+                total_cnt += i["valid_rssi_cnt"]
+            combined_avg_mw = total_mw / total_cnt
+            combined_avg_dbm = 10 * math.log10(combined_avg_mw)
+            return combined_avg_dbm
+        else:
+            stats = self.get(channel)
+            return stats["rssi"]
 
     def get_rx_ok_rate(self, channel: int) -> float:
         """计算指定信道的接收成功率"""
@@ -542,9 +574,7 @@ class ChannelStatsArray:
             raise ValueError(f"Unsupported format: {format}. Valid formats are 'table', 'csv', 'json'.")
     
     def _print_table(self, channels: list[dict], detailed: bool) -> None:
-        """以表格形式打印统计信息"""
-        from tabulate import tabulate
-        
+        """以表格形式打印统计信息"""        
         headers = ["Channel", "Avg RSSI (dBm)", "Rx OK", "Valid RSSI", "Invalid RSSI", "Rx Error", "Total"]
         if detailed:
             headers.extend(["Success Rate", "Audio Success rate"])
@@ -884,6 +914,9 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line):
     hist_array.print_all_with_selected(added_array, "Added", detailed=True)
     print("=======================================================================================")    
     
+    global error_rate_stat
+    error_rate_stat += [error_rate_cls(stats_array.get_average_rssi(-1),afh_error_rate)]
+    
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
     last_removed=removed_array
@@ -891,6 +924,7 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line):
 last_array = ChannelStatsArray(max_channel=79)
 hist_array = ChannelStatsArray(max_channel=79)
 last_removed = []
+error_rate_stat = []
 
 if __name__ == "__main__":
     
@@ -903,3 +937,18 @@ if __name__ == "__main__":
         output_file = "result2.csv"  # 替换为你想要的输出文件路径
     parse_file(input_file, output_file)
     print(f"处理完成，结果已保存到 {output_file}")
+    error_rate_sorted = sorted(error_rate_stat, key=lambda p: p.rssi)
+    # 转换为表格数据
+    table_data = [
+        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}"]
+            for item in error_rate_sorted
+    ]
+
+    # 使用 tabulate 打印表格
+    print(tabulate(
+        table_data,
+        headers=["RSSI (dBm)", "Error Rate"],
+        tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
+        floatfmt=".2f"
+    ))
+    
