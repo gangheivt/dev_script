@@ -10,15 +10,17 @@ from tabulate import tabulate
 afh_group=0
 afh_group_count=0
 afh_error_rate=0.0
+afh_cnt_delta =0
 channel_score_hist=[]
 
 DEFAULT_RX_OK_RATE=0.4
 DEFAULT_TTL=3
 
 class error_rate_cls:
-    def __init__(self, rssi, error_rate):
+    def __init__(self, rssi, error_rate, cnt):
         self.rssi = rssi
         self.error_rate = error_rate
+        self.cnt=cnt
     
     def __lt__(self, other):
         return self.rssi < other.rssi
@@ -246,11 +248,12 @@ def parse_file(input_txt, output_csv):
                 collected_bytes.extend(bytes_in_line)
                 
             if "afh_sco_data_stats" in line:
-                global afh_error_rate
+                global afh_error_rate, afh_cnt_delta
                 words = re.split(r'[,\s]+', line)
                 current_total = int(words[3])
                 current_error = int(words[4])
                 afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
+                afh_cnt_delta=current_total-last_total
                 last_total=current_total
                 last_error=current_error
         # 处理文件末尾的数据块
@@ -931,7 +934,7 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     print("=======================================================================================")    
     
     global error_rate_stat
-    error_rate_stat += [error_rate_cls(stats_array.get_average_rssi(-1),afh_error_rate)]
+    error_rate_stat += [error_rate_cls(stats_array.get_average_rssi(-1),afh_error_rate, afh_cnt_delta)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1018,4 +1021,16 @@ if __name__ == "__main__":
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
+    
+    total_error_rate=0
+    total_cnt=0
+    total_mw=0
+    for i in error_rate_sorted:
+        total_error_rate+=(i.error_rate*i.cnt)
+        total_mw += (10 ** (i.rssi / 10)) * i.cnt
+        total_cnt+=i.cnt
+    print("Average error rate %.4f%%" %(total_error_rate/total_cnt*100.0))
+    combined_avg_mw = total_mw / total_cnt
+    combined_avg_dbm = 10 * math.log10(combined_avg_mw)
+    print("Average RSSI %.4fdbm" %(combined_avg_dbm))
     
