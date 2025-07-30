@@ -297,6 +297,7 @@ class ChannelStatsArray:
             "rx_ok": 0,
             "rx_audio_ok": 0,
             "rx_error": 0,
+            "score": 0,
             "total": 0,
             "ttl":DEFAULT_TTL
         }
@@ -317,6 +318,10 @@ class ChannelStatsArray:
                 stats["inv_rssi_cnt"] += 1
             
             # 更新接收状态统计
+            if (item.rx_ok==1):
+                stats["score"] += 1
+            elif (item.sync_err==0 and item.rssi >= -95):
+                stats["score"] -= 1
             stats["rx_ok"] += item.rx_ok
             if (item.rx_ok>0 and item.is_audio>0):
                 stats["rx_audio_ok"] += item.rx_ok                
@@ -538,6 +543,7 @@ class ChannelStatsArray:
             current["rx_ok"] = history_stats["rx_ok"]
             current["rx_audio_ok"] = history_stats["rx_audio_ok"]
             current["rx_error"] = history_stats["rx_error"]
+            current["score"] = history_stats["score"]
             current["total"] = history_stats["total"]
         else:
             current["rssi"] = update_average_dbm(current["rssi"],current["valid_rssi_cnt"],history_stats['rssi'],history_stats["valid_rssi_cnt"])
@@ -546,6 +552,7 @@ class ChannelStatsArray:
             current["rx_ok"] += history_stats["rx_ok"]
             current["rx_audio_ok"] += history_stats["rx_audio_ok"]
             current["rx_error"] += history_stats["rx_error"]
+            current["score"] = (history_stats["score"]+current["score"])/2
             current["total"] += history_stats["total"]
         current["ttl"] = history_stats["ttl"]
 
@@ -575,7 +582,7 @@ class ChannelStatsArray:
     
     def _print_table(self, channels: list[dict], detailed: bool) -> None:
         """以表格形式打印统计信息"""        
-        headers = ["Channel", "Avg RSSI (dBm)", "Rx OK", "Valid RSSI", "Invalid RSSI", "Rx Error", "Total"]
+        headers = ["Channel", "Avg RSSI (dBm)", "Rx OK", "Valid RSSI", "Invalid RSSI", "Rx Error", "Score",  "Total"]
         if detailed:
             headers.extend(["Success Rate", "Audio Success rate"])
         
@@ -591,6 +598,7 @@ class ChannelStatsArray:
                 stats["valid_rssi_cnt"],
                 stats["inv_rssi_cnt"],
                 stats["rx_error"],
+                stats["score"],
                 stats["total"]
             ]
             
@@ -693,7 +701,7 @@ class ChannelStatsArray:
     def _print_table_with_mark(self, channels: list[dict], title:str, selected: list, detailed: bool) -> None:
         """带选中标记的表格打印（内部方法）"""
         # 表头添加标记列
-        headers = [title, "Channel", "Avg RSSI (dBm)", "Valid RSSI", "Invalid RSSI", "Rx OK", "Rx Error", "Total", "ttl"]
+        headers = [title, "Channel", "Avg RSSI (dBm)", "Valid RSSI", "Invalid RSSI", "Rx OK", "Rx Error", "Score", "Total", "ttl"]
         if detailed:
             headers.extend(["Success Rate", "Audio Success Rate"])
         
@@ -716,6 +724,7 @@ class ChannelStatsArray:
                 stats["inv_rssi_cnt"],
                 stats["rx_ok"],
                 stats["rx_error"],
+                stats["score"],
                 stats["total"],
                 stats["ttl"]
             ]
