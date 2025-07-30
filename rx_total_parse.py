@@ -195,7 +195,7 @@ def parse_file(input_txt, output_csv):
                 current_total = int(words[3])
                 current_error = int(words[4])
                 afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
-                print("afh_error_rate: ", afh_error_rate*100)
+                print("afh_error_rate: ", afh_error_rate*100, current_total-last_total)
                 afh_cnt_delta=current_total-last_total
                 last_total=current_total
                 last_error=current_error                
@@ -936,7 +936,8 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     print("=======================================================================================")    
     
     global error_rate_stat
-    error_rate_stat += [error_rate_cls(stats_array.get_average_rssi(-1),afh_error_rate, afh_cnt_delta)]
+    if (afh_cnt_delta<2000):
+        error_rate_stat += [error_rate_cls(stats_array.get_average_rssi(-1),afh_error_rate, afh_cnt_delta)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1012,14 +1013,14 @@ if __name__ == "__main__":
     error_rate_sorted = sorted(error_rate_stat, key=lambda p: p.rssi)
     # 转换为表格数据
     table_data = [
-        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}"]
+        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}, {item.cnt}"]
             for item in error_rate_sorted
     ]
 
     # 使用 tabulate 打印表格
     print(tabulate(
         table_data,
-        headers=["RSSI (dBm)", "Error Rate"],
+        headers=["RSSI (dBm)", "Error Rate", "cnt"],
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
