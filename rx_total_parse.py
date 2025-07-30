@@ -188,6 +188,17 @@ def parse_file(input_txt, output_csv):
                 print("Bad channels (indexes):", bad)
                 print("Unknown channels (indexes):", unknown)
                 continue
+                
+            if "afh_sco_data_stats" in line:
+                global afh_error_rate, afh_cnt_delta
+                words = re.split(r'[,\s]+', line)
+                current_total = int(words[3])
+                current_error = int(words[4])
+                afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
+                print("afh_error_rate: ", afh_error_rate*100)
+                afh_cnt_delta=current_total-last_total
+                last_total=current_total
+                last_error=current_error                
             # 检测块开始：行中包含"D/HEX sco rssi:"
             if "D/HEX" in line:
                 # 结束前一个块（如果未完成）
@@ -247,15 +258,6 @@ def parse_file(input_txt, output_csv):
                 bytes_in_line = byte_pattern.findall(byte_str)
                 collected_bytes.extend(bytes_in_line)
                 
-            if "afh_sco_data_stats" in line:
-                global afh_error_rate, afh_cnt_delta
-                words = re.split(r'[,\s]+', line)
-                current_total = int(words[3])
-                current_error = int(words[4])
-                afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
-                afh_cnt_delta=current_total-last_total
-                last_total=current_total
-                last_error=current_error
         # 处理文件末尾的数据块
         if active_block and len(collected_bytes) >= 2:
             process_block(collected_bytes, total_groups, writer, timestr_in_line, tag)
