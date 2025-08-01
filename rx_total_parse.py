@@ -194,7 +194,10 @@ def parse_file(input_txt, output_csv):
                 words = re.split(r'[,\s]+', line)
                 current_total = int(words[3])
                 current_error = int(words[4])
-                afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
+                if ((current_total-last_total)==0):
+                    print("afh_sco_data_stats: line",line_number, current_total, last_total )
+                else:
+                    afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
                 print("afh_error_rate: ", afh_error_rate*100, current_total-last_total)
                 afh_cnt_delta=current_total-last_total
                 last_total=current_total
@@ -380,9 +383,12 @@ class ChannelStatsArray:
             for i in self._array:
                 total_mw += (10 ** (i["rssi"] / 10)) * i["valid_rssi_cnt"]
                 total_cnt += i["valid_rssi_cnt"]
-            combined_avg_mw = total_mw / total_cnt
-            combined_avg_dbm = 10 * math.log10(combined_avg_mw)
-            return combined_avg_dbm
+            if (total_cnt>0):
+                combined_avg_mw = total_mw / total_cnt
+                combined_avg_dbm = 10 * math.log10(combined_avg_mw)
+                return combined_avg_dbm
+            else:
+                return -70
         else:
             stats = self.get(channel)
             return stats["rssi"]
@@ -1013,7 +1019,7 @@ if __name__ == "__main__":
     error_rate_sorted = sorted(error_rate_stat, key=lambda p: p.rssi)
     # 转换为表格数据
     table_data = [
-        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}, {item.cnt}"]
+        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.cnt}"]
             for item in error_rate_sorted
     ]
 
@@ -1029,9 +1035,10 @@ if __name__ == "__main__":
     total_cnt=0
     total_mw=0
     for i in error_rate_sorted:
-        total_error_rate+=(i.error_rate*i.cnt)
-        total_mw += (10 ** (i.rssi / 10)) * i.cnt
-        total_cnt+=i.cnt
+        if (i.rssi<-65 and i.rssi>-85):
+            total_error_rate+=(i.error_rate*i.cnt)
+            total_mw += (10 ** (i.rssi / 10)) * i.cnt
+            total_cnt+=i.cnt
     print("Average error rate %.4f%%" %(total_error_rate/total_cnt*100.0))
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
