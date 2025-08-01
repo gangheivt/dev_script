@@ -16,6 +16,8 @@ channel_score_hist=[]
 DEFAULT_RX_OK_RATE=0.4
 DEFAULT_TTL=3
 
+sf_scaned_chn=bytes(80)
+
 class error_rate_cls:
     def __init__(self, rssi, error_rate, cnt):
         self.rssi = rssi
@@ -168,27 +170,15 @@ def parse_file(input_txt, output_csv):
     
     current_total=0
     current_error=0
-    last_total=0;
-    last_error=0;
+    last_total=0
+    last_error=0
+    tag=0
     with open(input_txt, 'r') as infile, open(output_csv, 'w', newline='') as outfile:
         writer = csv.writer(outfile)
         writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
         
         for line_number, line in enumerate(infile, start = 1):
-            if "D/HEX afh_ch_map:" in line:
-                print("AFH map: ", end="")
-                afh_info=parse_afh_log_line(line)
-                afh_map=afh_info[4:14]
-                afh_suggest=afh_info[14:24]
-                used_channels=parse_afh_map(afh_map)
-                print_afh_channels(used_channels)
-                print("Remote：", end="")
-                good, bad, unknown=parse_channel_quality(afh_suggest)
-                print("Good channels (indexes):", good)
-                print("Bad channels (indexes):", bad)
-                print("Unknown channels (indexes):", unknown)
-                continue
-                
+               
             if "afh_sco_data_stats" in line:
                 global afh_error_rate, afh_cnt_delta
                 words = re.split(r'[,\s]+', line)
@@ -201,9 +191,12 @@ def parse_file(input_txt, output_csv):
                 print("afh_error_rate: ", afh_error_rate*100, current_total-last_total)
                 afh_cnt_delta=current_total-last_total
                 last_total=current_total
-                last_error=current_error                
+                last_error=current_error    
+                
             # 检测块开始：行中包含"D/HEX sco rssi:"
             if "D/HEX" in line:
+                if (active_block):
+                    process_block(collected_bytes, total_groups, writer, timestr_in_line, tag)
                 # 结束前一个块（如果未完成）
                 if "D/HEX rx total:" in line:
                     tag=1
@@ -214,9 +207,16 @@ def parse_file(input_txt, output_csv):
                     tag=2
                 elif "D/HEX si_ch_ass:" in line:
                     tag=3
+                elif "D/HEX all_scan:" in line:
+                    tag=4
+                elif "D/HEX afh_ch_map:" in line:
+                    tag=5
                 else:
-                    tag=3
-                #print("Processing block ", line_number, tag)
+                    tag=5
+                    
+                
+                    
+                print("Processing block ", line_number, tag)
                 
                 # 开始新数据块
                 active_block = True
@@ -227,6 +227,7 @@ def parse_file(input_txt, output_csv):
                 addr_match = addr_pattern.search(line)
                 if not addr_match:
                     active_block = False
+                    print("No addr_match")
                     continue
                 
                 # 获取时间
@@ -325,6 +326,7 @@ class ChannelStatsArray:
             "rx_error": 0,
             "score": 0,
             "total": 0,
+            "scan" : 0,
             "ttl":DEFAULT_TTL
         }
     
@@ -357,6 +359,7 @@ class ChannelStatsArray:
             stats["total"] += 1                     
         else:
             raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
+        stats["scan"]=sf_scaned_chn[channel]    
         self._sorted_array = sorted(
                 [stats for stats in self._array if stats["total"] > 0],
                 key=lambda x: self.get_rx_ok_rate(x["channel"]),
@@ -448,7 +451,7 @@ class ChannelStatsArray:
             排序后的统计数据列表
         """
         # 检查字段是否有效
-        valid_fields = {'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'rx_ok_rate', 'rx_audio_ok_rate'}
+        valid_fields = {'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'rx_ok_rate', 'rx_audio_ok_rate', 'scan'}
         if field not in valid_fields:
             raise ValueError(f"Invalid sort field: {field}. Valid fields are {valid_fields}")
         
@@ -466,6 +469,7 @@ class ChannelStatsArray:
                          reverse=reverse)            
         else:
             # 按普通字段排序
+            print("Sort by ", field )
             return sorted(channels, key=lambda x: x[field], reverse=reverse)
     
     def clear(self, channel: int) -> None:
@@ -584,6 +588,7 @@ class ChannelStatsArray:
             current["score"] = (history_stats["score"]+current["score"])/2
             current["total"] += history_stats["total"]
         current["ttl"] = history_stats["ttl"]
+        current["scan"] = history_stats["scan"]
 
     def print_stats(self, format: str = 'table', detailed: bool = False, sort_by: str = 'rx_audio_ok_rate') -> None:
         """
@@ -611,12 +616,13 @@ class ChannelStatsArray:
     
     def _print_table(self, channels: list[dict], detailed: bool) -> None:
         """以表格形式打印统计信息"""        
-        headers = ["Channel", "Avg RSSI (dBm)", "Rx OK", "Rx Error", "Score",  "Actual Score", "Invalid RSSI","Total" ]
+        headers = ["Channel", "Avg RSSI (dBm)", "Rx OK", "Rx Error", "Score", "Invalid RSSI","Total", "Scan value" ]
         if detailed:
             headers.extend(["Success Rate", "Audio Success rate"])
         
         table = []
         for stats in channels:
+            global sf_scaned_chn
             avg_rssi = self.get_average_rssi(stats["channel"])
             success_rate = stats["rx_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0
             audio_success_rate = stats["rx_audio_ok"] / stats["total"] * 100 if stats["total"] > 0 else 0            
@@ -627,9 +633,9 @@ class ChannelStatsArray:
                     stats["rx_ok"],
                     stats["rx_error"],
                     stats["score"],
-                    channel_score_hist[stats["channel"]].score,
                     stats["inv_rssi_cnt"],
-                    stats["total"]
+                    stats["total"],
+                    stats["scan"]
                 ]
             except:
                 row = [
@@ -639,9 +645,9 @@ class ChannelStatsArray:
                     stats["inv_rssi_cnt"],
                     stats["rx_error"],
                     stats["score"],
-                    -1000,
                     stats["inv_rssi_cnt"],                    
-                    stats["total"]
+                    stats["total"],
+                    stats["scan"]
                 ]
                 
             if detailed:
@@ -714,7 +720,7 @@ class ChannelStatsArray:
             selected_channels: 需要标记的选中信道列表
             format: 输出格式，支持 'table' (表格), 'csv' (逗号分隔值), 'json' (JSON格式)
             detailed: 是否显示详细信息，默认为 False
-            sort_by: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi'
+            sort_by: 排序字段，支持 'channel', 'rssi', 'valid_rssi_cnt', 'inv_rssi_cnt', 'rx_ok', 'rx_error', 'average_rssi', 'scan'
         """
         # 获取所有有数据的信道并排序
         all_channels = self.sort_by(sort_by)
@@ -743,7 +749,7 @@ class ChannelStatsArray:
     def _print_table_with_mark(self, channels: list[dict], title:str, selected: list, detailed: bool) -> None:
         """带选中标记的表格打印（内部方法）"""
         # 表头添加标记列
-        headers = [title, "Channel", "Avg RSSI (dBm)", "Invalid RSSI", "Rx OK", "Rx Error", "Score", "Total", "ttl"]
+        headers = [title, "Channel", "Avg RSSI (dBm)", "Invalid RSSI", "Rx OK", "Rx Error", "Score", "Total", "Scan value", "ttl"]
         if detailed:
             headers.extend(["Success Rate", "Audio Success Rate"])
         
@@ -767,6 +773,7 @@ class ChannelStatsArray:
                 stats["rx_error"],
                 stats["score"],
                 stats["total"],
+                stats["scan"],                
                 stats["ttl"]
             ]
             
@@ -938,7 +945,7 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     print(removed_array)    
     print("Added with history below: ", end="")
     print(added_array)
-    hist_array.print_all_with_selected(added_array, "Added", detailed=True)
+    hist_array.print_all_with_selected(added_array, "Added", detailed=True, sort_by="scan")
     print("=======================================================================================")    
     
     global error_rate_stat
@@ -972,6 +979,97 @@ def process_ch_hist(data_bytes):
         chan=chan+1
         channel_score_hist +=  [channel_hist(chan, hex_to_signed_int(data_bytes[i+4]), hex_to_signed_int(data_bytes[i+5]))]    
 
+def hex_to_signed_integers(hex_input):
+    """
+    Convert hex input (string with spaces or list of hex components) to list of signed 8-bit integers.
+    
+    Args:
+        hex_input (str or list): Input like "ab cd 12 34" or ["ab", "cd", "12", "34"]
+        
+    Returns:
+        list: List of signed integers (-128 to 127)
+    """
+    try:
+        # Convert hex input to bytes first using the original conversion
+        if isinstance(hex_input, list):
+            hex_str = ' '.join(hex_input)
+        else:
+            hex_str = hex_input
+            
+        byte_data = bytes.fromhex(hex_str)
+        
+        # Convert each byte to signed 8-bit integer
+        signed_ints = []
+        for byte in byte_data:
+            # For 8-bit two's complement: if > 127, subtract 256 to get negative value
+            if byte > 127:
+                signed_ints.append(byte - 256)
+            else:
+                signed_ints.append(byte)
+                
+        return signed_ints
+        
+    except TypeError:
+        raise TypeError("Input must be a string or list of strings")
+    except ValueError as e:
+        raise ValueError(f"Invalid hex format: {e}")
+        
+def process_ch_scan(data_bytes):
+    global sf_scaned_chn
+    print("SF scanned chn:", data_bytes)
+    data_bytes=hex_to_signed_integers(data_bytes)
+    scaned_chn = []
+    for i in range(40):
+        # Get the three elements from a
+        val1 = data_bytes[i]
+        val2 = data_bytes[i + 40]
+        val3 = data_bytes[i + 80]
+        val=max(val1,val2,val3)    
+        scaned_chn.append(val)        
+    sf_scaned_chn = [int(x) for x in scaned_chn]
+    sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
+    
+def hex_to_bytes(hex_input):
+    """
+    Convert hex input (string with spaces or list of hex components) to bytes.
+    
+    Args:
+        hex_input (str or list): Input like "ab cd 12 34" or ["ab", "cd", "12", "34"]
+        
+    Returns:
+        bytes: Converted bytes object
+    """
+    try:
+        # If input is a list, join elements into a string
+        if isinstance(hex_input, list):
+            hex_str = ' '.join(hex_input)
+        else:
+            hex_str = hex_input  # Assume it's a string
+            
+        # Convert to bytes
+        return bytes.fromhex(hex_str)
+        
+    except TypeError:
+        raise TypeError("Input must be a string or list of strings")
+    except ValueError as e:
+        raise ValueError(f"Invalid hex format: {e}")
+        
+def process_afh(data_bytes):
+    print("CH scan:", data_bytes)
+    print("AFH map: ", end="")
+    afh_map=data_bytes[4:14]
+    afh_map=hex_to_bytes(afh_map)
+    afh_suggest=data_bytes[14:24]
+    afh_suggest=hex_to_bytes(afh_suggest)
+    used_channels=parse_afh_map(afh_map)
+    print_afh_channels(used_channels)
+    print("Remote：", end="")
+    good, bad, unknown=parse_channel_quality(afh_suggest)
+    print("Good channels (indexes):", good)
+    print("Bad channels (indexes):", bad)
+    print("Unknown channels (indexes):", unknown)
+
+
 def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     """处理一个完整数据块并写入CSV"""
     
@@ -983,21 +1081,28 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     elif (tag==2):
         expected_bytes = 79 * 8
         data_bytes = bytes_list
+    elif (tag==4):
+        expected_bytes = 40 * 4 + 1
+        data_bytes = bytes_list
+    elif (tag==5):
+        expected_bytes = 28
+        data_bytes = bytes_list
+    else:
+        expected_bytes = 10000
         
     if len(bytes_list) < expected_bytes:
         print("Not enought data,", len(bytes_list), "<", expected_bytes)
         expected_bytes=len(bytes_list)
         #return  # 数据不完整    
-    
-    # 验证数据长度是4的倍数
-    if len(data_bytes) % 4 != 0:
-        print("Length error")
-        return
-    
+        
     if (tag==1):
         process_rx_total(data_bytes,writer, timestr_in_line)
     elif (tag==2):
         process_ch_hist(data_bytes)
+    elif (tag==4):
+        process_ch_scan(data_bytes)
+    elif (tag==5):
+        process_afh(data_bytes)
 
             
 last_array = ChannelStatsArray(max_channel=79)
@@ -1035,10 +1140,9 @@ if __name__ == "__main__":
     total_cnt=0
     total_mw=0
     for i in error_rate_sorted:
-        if (i.rssi<-65 and i.rssi>-85):
-            total_error_rate+=(i.error_rate*i.cnt)
-            total_mw += (10 ** (i.rssi / 10)) * i.cnt
-            total_cnt+=i.cnt
+        total_error_rate+=(i.error_rate*i.cnt)
+        total_mw += (10 ** (i.rssi / 10)) * i.cnt
+        total_cnt+=i.cnt
     print("Average error rate %.4f%%" %(total_error_rate/total_cnt*100.0))
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
