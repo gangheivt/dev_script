@@ -1136,15 +1136,31 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 import struct
 
+from typing import List, Union
+import struct
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.ticker import MultipleLocator
 
-def visualize_rssi_list(byte_arrays: List[Union[bytes, bytearray]], num_channels: int = 80, int_format: str = 'b'):
+def visualize_rssi_list(
+    byte_arrays: List[Union[bytes, bytearray]], 
+    num_channels: int = 80, 
+    int_format: str = 'b',
+    db_min: int = -100,    # Typical minimum RSSI value
+    db_max: int = -30,     # Typical maximum RSSI value
+    db_step: int = 5       # Major tick interval in dB
+):
     """
-    Visualize RSSI data from a list of byte arrays with strict input validation.
+    Visualize RSSI data from a list of byte arrays with accurate dB axis.
     
     Parameters:
     - byte_arrays: List of bytes/bytearray objects, each containing RSSI values
     - num_channels: Number of channels per array (default: 80)
-    - int_format: Struct format for integers (default: 'h' for 16-bit signed int)
+    - int_format: Struct format for integers (default: 'b' for 8-bit signed int)
+    - db_min: Minimum value for dB axis (default: -100)
+    - db_max: Maximum value for dB axis (default: -30)
+    - db_step: Interval between major ticks on dB axis (default: 5)
     """
     # Validate input list
     if not isinstance(byte_arrays, list):
@@ -1178,7 +1194,9 @@ def visualize_rssi_list(byte_arrays: List[Union[bytes, bytearray]], num_channels
         # Unpack byte array into integers
         try:
             values = struct.unpack(f'{num_channels}{int_format}', arr)
-            rssi_data.append(values)
+            # Clamp values to our dB range for better visualization
+            clamped_values = [max(db_min, min(v, db_max)) for v in values]
+            rssi_data.append(clamped_values)
         except Exception as e:
             print(f"Error unpacking byte array {i+1}: {str(e)}. Skipping.")
             continue
@@ -1190,65 +1208,71 @@ def visualize_rssi_list(byte_arrays: List[Union[bytes, bytearray]], num_channels
     print(f"Successfully loaded {len(rssi_data)} valid data samples")
     rssi_data_np = np.array(rssi_data)
     total_samples = len(rssi_data_np)
-    
-    # Initialize plot with proper spacing for title
-    fig, ax = plt.subplots(figsize=(16, 10))  # Slightly taller figure
-    fig.subplots_adjust(top=0.9)  # Make space for title at the top
+
+    # Initialize plot
+    fig, ax = plt.subplots(figsize=(16, 10))
+    fig.subplots_adjust(top=0.9)
     fig.canvas.manager.set_window_title('RSSI Channel Visualizer')
     
     # Create bars
     channels = np.arange(1, num_channels + 1)
     bars = ax.bar(channels, np.zeros(num_channels), color='blue', alpha=0.8)
     
-    # Configure plot with explicit title setup
+    # Configure dB axis with precise settings
+    ax.set_ylim(db_min, db_max)  # Fixed range based on typical RSSI values
+    ax.yaxis.set_major_locator(MultipleLocator(db_step))  # Major ticks
+    ax.yaxis.set_minor_locator(MultipleLocator(db_step / 2))  # Minor ticks for precision
+    
+    # Add grid for better readability
+    ax.grid(axis='y', which='major', linestyle='-', alpha=0.7)
+    ax.grid(axis='y', which='minor', linestyle='--', alpha=0.3)
+    
+    # Configure labels and title
     ax.set_xlabel('Channel Number', fontsize=12, fontweight='bold')
-    ax.set_ylabel('RSSI Value', fontsize=12, fontweight='bold')
+    ax.set_ylabel('RSSI (dBm)', fontsize=12, fontweight='bold')  # Explicit dBm labeling
     ax.set_xticks(channels[::5])
     ax.set_xticklabels(channels[::5], fontsize=10)
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
     
-    # Create title with high visibility settings
+    # Title configuration
     title = ax.set_title(
-        f'RSSI Values (Sample 1/{total_samples})',  # Initial title
-        fontsize=18,          # Larger font
-        fontweight='bold',    # Bolder
-        pad=20,               # Space from plot
-        color='darkblue'      # Distinct color
+        f'RSSI Values (Sample 1/{total_samples})',
+        fontsize=18,
+        fontweight='bold',
+        pad=20,
+        color='darkblue'
     )
     
-    # Update function with reliable title updates
+    # Update function
     def update(frame):
         current_values = rssi_data_np[frame]
         
-        # Update bars
+        # Update bars with precise height values
         for bar, value in zip(bars, current_values):
             bar.set_height(value)
+            # Maintain color coding for out-of-range values
+            if value <= db_min or value >= db_max:
+                bar.set_color('red')
+            else:
+                bar.set_color('blue')
         
-        # Update title explicitly
+        # Update title
         title.set_text(f'RSSI Values (Sample {frame + 1}/{total_samples})')
         
-        # Adjust y-axis
-        min_val = current_values.min()
-        max_val = current_values.max()
-        padding = (max_val - min_val) * 0.1 if max_val != min_val else 5
-        ax.set_ylim(min_val - padding, max_val + padding)
-        
-        # Redraw the canvas to ensure title updates
         fig.canvas.draw_idle()
-        
         return bars
     
-    # Animation with blit=False to ensure title updates (tradeoff for reliability)
+    # Create animation
     animation = FuncAnimation(
         fig,
         update,
         frames=total_samples,
         interval=1000,
-        blit=False,  # Disabled blit for reliable text updates
+        blit=False,
         repeat=False
     )
     
     plt.show()
+
 
 
 if __name__ == "__main__":
