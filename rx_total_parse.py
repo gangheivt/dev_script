@@ -17,6 +17,7 @@ DEFAULT_RX_OK_RATE=0.4
 DEFAULT_TTL=3
 
 sf_scaned_chn=bytes(80)
+sf_scaned_chns=[]
 
 class error_rate_cls:
     def __init__(self, rssi, error_rate, cnt):
@@ -1019,7 +1020,7 @@ def hex_to_signed_integers(hex_input):
         raise ValueError(f"Invalid hex format: {e}")
         
 def process_ch_scan(data_bytes, type=1):
-    global sf_scaned_chn
+    global sf_scaned_chn, sf_scaned_chns
     print("SF scanned chn:", data_bytes)
     data_bytes=hex_to_signed_integers(data_bytes)
     scaned_chn = []
@@ -1041,6 +1042,7 @@ def process_ch_scan(data_bytes, type=1):
         scaned_chn.append(val)        
     sf_scaned_chn = [int(x) for x in scaned_chn]
     sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
+    sf_scaned_chns += [sf_scaned_chn]
     
 def hex_to_bytes(hex_input):
     """
@@ -1129,6 +1131,126 @@ hist_array = ChannelStatsArray(max_channel=79)
 last_removed = []
 error_rate_stat = []
 
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.animation import FuncAnimation
+import struct
+
+
+def visualize_rssi_list(byte_arrays: List[Union[bytes, bytearray]], num_channels: int = 80, int_format: str = 'b'):
+    """
+    Visualize RSSI data from a list of byte arrays with strict input validation.
+    
+    Parameters:
+    - byte_arrays: List of bytes/bytearray objects, each containing RSSI values
+    - num_channels: Number of channels per array (default: 80)
+    - int_format: Struct format for integers (default: 'h' for 16-bit signed int)
+    """
+    # Validate input list
+    if not isinstance(byte_arrays, list):
+        print("Error: Input must be a list of byte arrays")
+        return
+        
+    if len(byte_arrays) == 0:
+        print("Error: The list of byte arrays is empty")
+        return
+    
+    # Calculate required byte length
+    bytes_per_value = struct.calcsize(int_format)
+    required_length = num_channels * bytes_per_value
+    print(f"Expecting {required_length} bytes per array ({num_channels} channels × {bytes_per_value} bytes each)")
+    
+    # Process each byte array with strict validation
+    rssi_data = []
+    for i, arr in enumerate(byte_arrays):
+        # Check if element is a bytes-like object
+        arr = struct.pack(f"{len(arr)}b", *arr)
+        if not isinstance(arr, (bytes, bytearray)):
+            print(f"Error: Element {i+1} is not a byte array. Found type: {type(arr).__name__}. Skipping.")
+            continue
+            
+        # Check byte array length
+        if len(arr) != required_length:
+            print(f"Warning: Byte array {i+1} has incorrect length. "
+                  f"Expected {required_length} bytes, got {len(arr)}. Skipping.")
+            continue
+            
+        # Unpack byte array into integers
+        try:
+            values = struct.unpack(f'{num_channels}{int_format}', arr)
+            rssi_data.append(values)
+        except Exception as e:
+            print(f"Error unpacking byte array {i+1}: {str(e)}. Skipping.")
+            continue
+    
+    if not rssi_data:
+        print("Error: No valid RSSI data to visualize after validation")
+        return
+    
+    print(f"Successfully loaded {len(rssi_data)} valid data samples")
+    rssi_data_np = np.array(rssi_data)
+    total_samples = len(rssi_data_np)
+    
+    # Initialize plot with proper spacing for title
+    fig, ax = plt.subplots(figsize=(16, 10))  # Slightly taller figure
+    fig.subplots_adjust(top=0.9)  # Make space for title at the top
+    fig.canvas.manager.set_window_title('RSSI Channel Visualizer')
+    
+    # Create bars
+    channels = np.arange(1, num_channels + 1)
+    bars = ax.bar(channels, np.zeros(num_channels), color='blue', alpha=0.8)
+    
+    # Configure plot with explicit title setup
+    ax.set_xlabel('Channel Number', fontsize=12, fontweight='bold')
+    ax.set_ylabel('RSSI Value', fontsize=12, fontweight='bold')
+    ax.set_xticks(channels[::5])
+    ax.set_xticklabels(channels[::5], fontsize=10)
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    # Create title with high visibility settings
+    title = ax.set_title(
+        f'RSSI Values (Sample 1/{total_samples})',  # Initial title
+        fontsize=18,          # Larger font
+        fontweight='bold',    # Bolder
+        pad=20,               # Space from plot
+        color='darkblue'      # Distinct color
+    )
+    
+    # Update function with reliable title updates
+    def update(frame):
+        current_values = rssi_data_np[frame]
+        
+        # Update bars
+        for bar, value in zip(bars, current_values):
+            bar.set_height(value)
+        
+        # Update title explicitly
+        title.set_text(f'RSSI Values (Sample {frame + 1}/{total_samples})')
+        
+        # Adjust y-axis
+        min_val = current_values.min()
+        max_val = current_values.max()
+        padding = (max_val - min_val) * 0.1 if max_val != min_val else 5
+        ax.set_ylim(min_val - padding, max_val + padding)
+        
+        # Redraw the canvas to ensure title updates
+        fig.canvas.draw_idle()
+        
+        return bars
+    
+    # Animation with blit=False to ensure title updates (tradeoff for reliability)
+    animation = FuncAnimation(
+        fig,
+        update,
+        frames=total_samples,
+        interval=1000,
+        blit=False,  # Disabled blit for reliable text updates
+        repeat=False
+    )
+    
+    plt.show()
+
+
 if __name__ == "__main__":
     
     input_file = sys.argv[1]  # 替换为你的输入文件路径
@@ -1166,4 +1288,8 @@ if __name__ == "__main__":
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
     print("Average RSSI %.4fdbm" %(combined_avg_dbm))
+
+    # Visualize the data
+    visualize_rssi_list(sf_scaned_chns)
+
     
