@@ -1028,14 +1028,16 @@ def process_ch_scan(data_bytes, type=1):
         val1 = data_bytes[i]
         val2 = data_bytes[i + 40]
         val3 = data_bytes[i + 80]
+        val4 = data_bytes[i + 120]
         if (type==1):
             total_mw = (10 ** (val1 / 10)) 
             total_mw += (10 ** (val2 / 10)) 
             total_mw += (10 ** (val3 / 10)) 
-            total_mw /= 3
+            total_mw += (10 ** (val4 / 10)) 
+            total_mw /= 4
             val=10 * math.log10(total_mw)
         else:
-            val=max(val1,val2,val3)    
+            val=max(val1,val2,val3,val4)    
         scaned_chn.append(val)        
     sf_scaned_chn = [int(x) for x in scaned_chn]
     sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
