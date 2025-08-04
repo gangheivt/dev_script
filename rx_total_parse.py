@@ -17,7 +17,9 @@ DEFAULT_RX_OK_RATE=0.4
 DEFAULT_TTL=3
 
 sf_scaned_chn=bytes(80)
+
 sf_scaned_chns=[]
+sf_stats_array=[]
 
 class error_rate_cls:
     def __init__(self, rssi, error_rate, cnt):
@@ -382,7 +384,34 @@ class ChannelStatsArray:
         """获取指定信道的统计数据"""
         self._check_channel(channel)
         return self._array[channel]
-    
+
+    def get_success_rate_rssi(self) ->  List[bytes]:
+        # Generate RSSI values (-95 to -30 dBm)
+        rssi = sf_scaned_chn
+        # Generate success counts (0-15)
+        successes = [0] * 80        
+        for i in self._array:
+            successes[i['channel']]=i['rx_ok']
+        # Generate failure counts (0-5)
+        failures = [0] * 80
+        for i in self._array:
+            failures[i['channel']]=i['valid_rssi_cnt']-i['rx_ok']
+            
+        def list_to_bytes(int_list, signed=True):
+            """将整数列表转换为字节数组"""
+            byte_array = bytearray()
+            for num in int_list:
+                # 将每个整数转换为1字节，并添加到字节数组中
+                byte_array.extend(num.to_bytes(1,byteorder='big',signed=signed))
+            return byte_array
+
+        # 转换每组数据（list1有负数，需要signed=True）
+        bytes1 = list_to_bytes(rssi, signed=True)
+        bytes2 = list_to_bytes(successes, signed=False)
+        bytes3 = list_to_bytes(failures, signed=False)
+       
+        return [bytes1+bytes2+bytes3]
+        
     def get_average_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
         if (channel<0):
@@ -862,6 +891,7 @@ class ChannelStatsArray:
             output.append(channel_data)
         
         print(json.dumps(output, indent=2))
+
         
 def process_rx_total(data_bytes, writer, timestr_in_line):
     channels=[]
@@ -945,6 +975,9 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
 
     print("Evaluate Current block as Below--------------------")
     stats_array.print_stats(detailed=True)
+    
+    global sf_stats_array
+    sf_stats_array+=stats_array.get_success_rate_rssi();
 
     print("Removed ", end="")
     print(removed_array)    
@@ -1180,7 +1213,6 @@ def visualize_rssi_list(
     rssi_data = []
     for i, arr in enumerate(byte_arrays):
         # Check if element is a bytes-like object
-        arr = struct.pack(f"{len(arr)}b", *arr)
         if not isinstance(arr, (bytes, bytearray)):
             print(f"Error: Element {i+1} is not a byte array. Found type: {type(arr).__name__}. Skipping.")
             continue
@@ -1275,6 +1307,7 @@ def visualize_rssi_list(
 
 
 
+from rssi_success_rate import  RSSISuccessTracker 
 if __name__ == "__main__":
     
     input_file = sys.argv[1]  # 替换为你的输入文件路径
@@ -1314,6 +1347,21 @@ if __name__ == "__main__":
     print("Average RSSI %.4fdbm" %(combined_avg_dbm))
 
     # Visualize the data
-    visualize_rssi_list(sf_scaned_chns)
+    # visualize_rssi_list(sf_scaned_chns)
+    
+        # Create and run the tracker
+    print("Starting visualization...")
+        
+    tracker = RSSISuccessTracker(
+        byte_arrays=sf_stats_array,
+        num_channels=80,
+        int_format='b',
+        db_min=-100,
+        db_max=-30,
+        db_step=5,
+        count_max=20
+    )    
+    # Start the visualization
+    tracker.start_visualization()
 
     
