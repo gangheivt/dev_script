@@ -209,10 +209,14 @@ def parse_file(input_txt, output_csv):
                     tag=3
                 elif "D/HEX all_scan:" in line:
                     tag=4
+                elif "D/HEX ch_scan:" in line:
+                    tag=5
+                elif "D/HEX ch_assess:" in line:
+                    tag=6                    
                 elif "D/HEX afh_ch_map:" in line:
-                    tag=5
+                    tag=7
                 else:
-                    tag=5
+                    tag=8
                     
                 
                     
@@ -1014,7 +1018,7 @@ def hex_to_signed_integers(hex_input):
     except ValueError as e:
         raise ValueError(f"Invalid hex format: {e}")
         
-def process_ch_scan(data_bytes):
+def process_ch_scan(data_bytes, type=1):
     global sf_scaned_chn
     print("SF scanned chn:", data_bytes)
     data_bytes=hex_to_signed_integers(data_bytes)
@@ -1024,7 +1028,14 @@ def process_ch_scan(data_bytes):
         val1 = data_bytes[i]
         val2 = data_bytes[i + 40]
         val3 = data_bytes[i + 80]
-        val=max(val1,val2,val3)    
+        if (type==1):
+            total_mw = (10 ** (val1 / 10)) 
+            total_mw += (10 ** (val2 / 10)) 
+            total_mw += (10 ** (val3 / 10)) 
+            total_mw /= 3
+            val=10 * math.log10(total_mw)
+        else:
+            val=max(val1,val2,val3)    
         scaned_chn.append(val)        
     sf_scaned_chn = [int(x) for x in scaned_chn]
     sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
@@ -1085,8 +1096,14 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         expected_bytes = 40 * 4 + 1
         data_bytes = bytes_list
     elif (tag==5):
-        expected_bytes = 28
+        expected_bytes = 10
+        data_bytes = bytes_list        
+    elif (tag==6):
+        expected_bytes = 560
         data_bytes = bytes_list
+    elif (tag==7):
+        expected_bytes = 28
+        data_bytes = bytes_list    
     else:
         expected_bytes = 10000
         
@@ -1103,7 +1120,7 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         process_ch_scan(data_bytes)
     elif (tag==5):
         process_afh(data_bytes)
-
+    
             
 last_array = ChannelStatsArray(max_channel=79)
 hist_array = ChannelStatsArray(max_channel=79)
