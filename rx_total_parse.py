@@ -176,6 +176,7 @@ def parse_file(input_txt, output_csv):
     last_total=0
     last_error=0
     tag=0
+    index=1
     with open(input_txt, 'r') as infile, open(output_csv, 'w', newline='') as outfile:
         writer = csv.writer(outfile)
         writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
@@ -202,6 +203,8 @@ def parse_file(input_txt, output_csv):
                     process_block(collected_bytes, total_groups, writer, timestr_in_line, tag)
                 # 结束前一个块（如果未完成）
                 if "D/HEX rx total:" in line:
+                    print("Mark Line ", line_number, ", Index ", index)
+                    index+=1
                     tag=1
                     afh_group_count=0;
                     afh_group = afh_group + 1
