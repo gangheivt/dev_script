@@ -1085,6 +1085,8 @@ def process_ch_scan(data_bytes, type=1):
         scaned_chn.append(val)        
     sf_scaned_chn = [int(x) for x in scaned_chn]
     sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
+    sf_scaned_chn[1]=sf_scaned_chn[2]
+    sf_scaned_chn[25]=sf_scaned_chn[26]    
     sf_scaned_chns += [sf_scaned_chn]
     
 def hex_to_bytes(hex_input):
@@ -1375,6 +1377,8 @@ if __name__ == "__main__":
         db_min=-100,
         db_max=-30,
         db_step=5,
+        delta_min=-40,
+        delta_max=40,        
         count_max=20
     )    
     # Start the visualization
