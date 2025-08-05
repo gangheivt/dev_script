@@ -388,6 +388,12 @@ class ChannelStatsArray:
     def get_success_rate_rssi(self) ->  List[bytes]:
         # Generate RSSI values (-95 to -30 dBm)
         rssi = sf_scaned_chn
+        
+        # Generate Actual RSSI values (-95 to -30 dBm)
+        act_rssi = [0] * 80        
+        for i in self._array:
+            act_rssi[i['channel']]=int(i['rssi'])
+
         # Generate success counts (0-15)
         successes = [0] * 80        
         for i in self._array:
@@ -407,10 +413,10 @@ class ChannelStatsArray:
 
         # 转换每组数据（list1有负数，需要signed=True）
         bytes1 = list_to_bytes(rssi, signed=True)
-        bytes2 = list_to_bytes(successes, signed=False)
-        bytes3 = list_to_bytes(failures, signed=False)
-       
-        return [bytes1+bytes2+bytes3]
+        bytes2 = list_to_bytes(act_rssi, signed=True)
+        bytes3 = list_to_bytes(successes, signed=False)
+        bytes4 = list_to_bytes(failures, signed=False)       
+        return [bytes1+bytes2+bytes3+bytes4]
         
     def get_average_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
