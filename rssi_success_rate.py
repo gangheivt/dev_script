@@ -14,11 +14,14 @@ class RSSISuccessTracker:
         db_min: int = -100,
         db_max: int = -30,
         db_step: int = 5,
+        delta_min: int = -20,
+        delta_max: int = 20,
+        delta_step: int = 5,
         count_min: int = 0,
         count_max: Optional[int] = None,
         min_count_max: int = 40,
-        subplot_heights: List[float] = [0.25, 0.25, 0.5],  # [Scanned, Actual, Success/Failure]
-        update_interval: int = 1000  # Animation update interval in ms
+        subplot_heights: List[float] = [0.3, 0.3, 0.4],  # [Scanned, Delta, Success/Failure]
+        update_interval: int = 1000
     ):
         self.byte_arrays = byte_arrays
         self.num_channels = num_channels
@@ -26,6 +29,9 @@ class RSSISuccessTracker:
         self.db_min = db_min
         self.db_max = db_max
         self.db_step = db_step
+        self.delta_min = delta_min
+        self.delta_max = delta_max
+        self.delta_step = delta_step
         self.count_min = count_min
         self.count_max = count_max
         self.min_count_max = min_count_max
@@ -34,6 +40,8 @@ class RSSISuccessTracker:
         
         # Process input data
         self.rssi_data, self.act_rssi_data, self.success_data, self.failure_data = self._process_data()
+        # Calculate delta (actual - scanned)
+        self.delta_data = self.act_rssi_data - self.rssi_data if self.act_rssi_data is not None else None
         self.total_samples = len(self.rssi_data) if self.rssi_data is not None else 0
         
         if self.total_samples > 0:
@@ -99,12 +107,12 @@ class RSSISuccessTracker:
     def _initialize_plot(self):
         """Initialize the visualization with three subplots"""
         # Create 3 subplots with shared x-axis
-        self.fig, (self.ax_scan_rssi, self.ax_act_rssi, self.ax_success) = plt.subplots(
+        self.fig, (self.ax_scan_rssi, self.ax_delta, self.ax_success) = plt.subplots(
             3, 1, figsize=(16, 16), sharex=True,
             gridspec_kw={'height_ratios': self.subplot_heights}
         )
         self.fig.subplots_adjust(top=0.95, hspace=0.2)
-        self.fig.canvas.manager.set_window_title('RSSI & Success/Failure Tracker')
+        self.fig.canvas.manager.set_window_title('RSSI Delta Tracker')
         
         self.channels = np.arange(1, self.num_channels + 1)
         
@@ -118,7 +126,7 @@ class RSSISuccessTracker:
             self.count_max = max(self.count_max, self.min_count_max)
         
         # --------------------------
-        # 1. Scanned RSSI Subplot
+        # 1. Scanned RSSI Subplot (Top)
         # --------------------------
         self.scan_rssi_bars = self.ax_scan_rssi.bar(
             self.channels, 
@@ -138,28 +146,27 @@ class RSSISuccessTracker:
         self.ax_scan_rssi.set_title('Scanned RSSI by Channel', fontsize=14, fontweight='bold')
         
         # --------------------------
-        # 2. Actual RSSI Subplot
+        # 2. Delta Subplot (Middle) - Actual RSSI - Scanned RSSI
         # --------------------------
-        self.act_rssi_bars = self.ax_act_rssi.bar(
+        self.delta_bars = self.ax_delta.bar(
             self.channels, 
             np.zeros(self.num_channels), 
-            color='cyan', 
             alpha=0.8, 
-            label='Actual RSSI (dBm)'
+            label='Delta (Actual - Scanned)'
         )
         
-        # Same scale as scanned RSSI for direct comparison
-        self.ax_act_rssi.set_ylim(self.db_min, self.db_max)
-        self.ax_act_rssi.yaxis.set_major_locator(MultipleLocator(self.db_step))
-        self.ax_act_rssi.yaxis.set_minor_locator(MultipleLocator(self.db_step / 2))
-        self.ax_act_rssi.grid(axis='y', which='major', linestyle='-', alpha=0.7)
-        self.ax_act_rssi.grid(axis='y', which='minor', linestyle='--', alpha=0.3)
-        self.ax_act_rssi.set_ylabel('RSSI (dBm)', fontsize=12, fontweight='bold')
-        self.ax_act_rssi.legend(loc='upper right')
-        self.ax_act_rssi.set_title('Actual RSSI by Channel', fontsize=14, fontweight='bold')
+        self.ax_delta.set_ylim(self.delta_min, self.delta_max)
+        self.ax_delta.yaxis.set_major_locator(MultipleLocator(self.delta_step))
+        self.ax_delta.yaxis.set_minor_locator(MultipleLocator(self.delta_step / 2))
+        self.ax_delta.grid(axis='y', which='major', linestyle='-', alpha=0.7)
+        self.ax_delta.grid(axis='y', which='minor', linestyle='--', alpha=0.3)
+        self.ax_delta.axhline(y=0, color='black', linestyle='-', alpha=0.5)  # Zero reference line
+        self.ax_delta.set_ylabel('Delta (dBm)', fontsize=12, fontweight='bold')
+        self.ax_delta.legend(loc='upper right')
+        self.ax_delta.set_title('RSSI Difference (Actual - Scanned) - Only with Activity', fontsize=14, fontweight='bold')
         
         # --------------------------
-        # 3. Success/Failure Subplot
+        # 3. Success/Failure Subplot (Bottom)
         # --------------------------
         self.success_container = None
         self.failure_container = None
@@ -190,26 +197,33 @@ class RSSISuccessTracker:
         current_scan_rssi = self.rssi_data[frame]
         for bar, value in zip(self.scan_rssi_bars, current_scan_rssi):
             bar.set_height(value)
-            # Color coding for out-of-range values
-            if value < self.db_min or value > self.db_max:
-                bar.set_color('purple')
-            else:
-                bar.set_color('blue')
+            bar.set_color('purple' if value < self.db_min or value > self.db_max else 'blue')
         
-        # Update Actual RSSI bars
-        current_act_rssi = self.act_rssi_data[frame]
-        for bar, value in zip(self.act_rssi_bars, current_act_rssi):
-            bar.set_height(value)
-            # Color coding for out-of-range values (matches scanned RSSI)
-            if value < self.db_min or value > self.db_max:
-                bar.set_color('magenta')
-            else:
-                bar.set_color('cyan')
-        
-        # Update Success/Failure bars
+        # Get current frame data
+        current_delta = self.delta_data[frame]
         current_success = self.success_data[frame]
         current_failure = self.failure_data[frame]
         
+        # Update Delta bars - ONLY SHOW when success OR failure > 0
+        for i, (delta, success, failure) in enumerate(zip(
+            current_delta, current_success, current_failure
+        )):
+            if success > 0 or failure > 0:
+                # Show delta with color coding when there's activity
+                self.delta_bars[i].set_height(delta)
+                if delta > 0:
+                    self.delta_bars[i].set_color('#4CAF50')  # Green for positive delta
+                elif delta < 0:
+                    self.delta_bars[i].set_color('#F44336')  # Red for negative delta
+                else:
+                    self.delta_bars[i].set_color('#9E9E9E')  # Gray for zero delta
+                self.delta_bars[i].set_alpha(0.8)
+            else:
+                # Hide delta when no activity (success and failure are zero)
+                self.delta_bars[i].set_height(0)
+                self.delta_bars[i].set_alpha(0)  # Make completely transparent
+        
+        # Update Success/Failure bars (Bottom subplot)
         # Remove old bars
         if self.success_container:
             for bar in self.success_container:
@@ -244,7 +258,7 @@ class RSSISuccessTracker:
         # Return all bars for animation
         return (
             list(self.scan_rssi_bars) + 
-            list(self.act_rssi_bars) +
+            list(self.delta_bars) +
             list(self.success_container) + 
             list(self.failure_container)
         )
@@ -270,7 +284,7 @@ if __name__ == "__main__":
     import random
     
     def generate_sample_data(num_samples=10, num_channels=80):
-        """Generate sample data for testing the tracker"""
+        """Generate sample data with some inactive channels"""
         sample_arrays = []
         int_format = 'b'  # Using signed byte format
         
@@ -278,14 +292,25 @@ if __name__ == "__main__":
             # Generate scanned RSSI values (-95 to -30 dBm)
             rssi = [random.randint(-95, -30) for _ in range(num_channels)]
             
-            # Generate actual RSSI with small variations from scanned values
-            act_rssi = [x + random.randint(-7, 7) for x in rssi]
+            # Generate actual RSSI with variations from scanned values
+            act_rssi = [x + random.randint(-15, 15) for x in rssi]
             
-            # Generate success counts (0-35)
-            successes = [random.randint(0, 35) for _ in range(num_channels)]
+            # Generate success counts with some zeros (inactive channels)
+            successes = []
+            for _ in range(num_channels):
+                # 30% chance of inactivity
+                if random.random() < 0.3:
+                    successes.append(0)
+                else:
+                    successes.append(random.randint(1, 35))
             
-            # Generate failure counts (0-15)
-            failures = [random.randint(0, 15) for _ in range(num_channels)]
+            # Generate failure counts (only non-zero when there's success)
+            failures = []
+            for s in successes:
+                if s == 0:
+                    failures.append(0)
+                else:
+                    failures.append(random.randint(0, 15))
             
             # Combine all values and pack into byte array
             all_values = rssi + act_rssi + successes + failures
@@ -300,9 +325,11 @@ if __name__ == "__main__":
     # Create and start the tracker
     tracker = RSSISuccessTracker(
         sample_data,
-        min_count_max=40,
+        min_count_max=80,
         db_min=-100,
         db_max=-30,
+        delta_min=-40,
+        delta_max=40,
         update_interval=800  # Update every 800ms
     )
     tracker.start_visualization()
