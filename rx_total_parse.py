@@ -17,6 +17,7 @@ DEFAULT_RX_OK_RATE=0.4
 DEFAULT_TTL=3
 
 sf_scaned_chn=bytes(80)
+afh_ch_map=bytes(80)
 
 sf_scaned_chns=[]
 sf_stats_array=[]
@@ -431,7 +432,9 @@ class ChannelStatsArray:
         bytes2 = list_to_bytes(act_rssi, signed=True)
         bytes3 = list_to_bytes(successes, signed=False)
         bytes4 = list_to_bytes(failures, signed=False)       
-        return [bytes1+bytes2+bytes3+bytes4]
+        bytes5 = list_to_bytes(afh_ch_map, signed=False)       
+        print(bytes5)
+        return [bytes1+bytes2+bytes3+bytes4+bytes5]
         
     def get_average_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
@@ -1141,45 +1144,55 @@ def process_afh(data_bytes):
     print("Unknown channels (indexes):", unknown)
 
 
+def process_afh_map(data_bytes):
+    global afh_ch_map
+    afh_ch_map = [0] * 80        
+    for i in range(10):
+        temp=data_bytes[i+4]
+        temp=int(temp, 16)
+        for j in range(8):
+            if not ((temp & (1<<j)) == 0):
+                afh_ch_map[i*8+j]=1;        
+                
 def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     """处理一个完整数据块并写入CSV"""
     
     # 计算预期总字节数 = 2(组数字节) + total_groups * 4
-    if (tag==1 or tag==3):
+    if (tag==1 or tag==3):      # 1== 'rx total:' 3=='si_ch_ass'
         expected_bytes = 2 + total_groups * 4
         # 跳过前2个组数字节，从第3个字节开始
         data_bytes = bytes_list[2:expected_bytes]
-    elif (tag==2):
+    elif (tag==2):              # ch_hist
         expected_bytes = 79 * 8
         data_bytes = bytes_list
-    elif (tag==4):
+    elif (tag==4):              # all_scan
         expected_bytes = 40 * 4 + 1
         data_bytes = bytes_list
-    elif (tag==5):
+    elif (tag==5):              # ch_scan
         expected_bytes = 10
         data_bytes = bytes_list        
-    elif (tag==6):
+    elif (tag==6):              # ch_assess
         expected_bytes = 560
         data_bytes = bytes_list
-    elif (tag==7):
-        expected_bytes = 28
+    elif (tag==7):              # afh_ch_map
+        expected_bytes = 28     
         data_bytes = bytes_list   
-    elif (tag==8):
+    elif (tag==8):              # ch_sinr
         expected_bytes = 242
         data_bytes = bytes_list    
-    elif (tag==9):
+    elif (tag==9):              # scan_rssi
         expected_bytes = 80
         data_bytes = bytes_list         
     elif (tag==10):             # ch_rssi
         expected_bytes = 79
         data_bytes = bytes_list
-    elif (tag==11):
+    elif (tag==11):             # wifi_est
         expected_bytes = 10
         data_bytes = bytes_list
-    elif (tag==12):
+    elif (tag==12):             # temp_ch
         expected_bytes = 10
         data_bytes = bytes_list
-    elif (tag==13):
+    elif (tag==13):             # temp_ch2
         expected_bytes = 10
         data_bytes = bytes_list        
     else:
@@ -1198,6 +1211,9 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         process_ch_scan(data_bytes)
     elif (tag==5):
         process_afh(data_bytes)
+    elif (tag==7):
+        process_afh_map(data_bytes)
+    
     
             
 last_array = ChannelStatsArray(max_channel=79)
