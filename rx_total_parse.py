@@ -225,8 +225,16 @@ def parse_file(input_txt, output_csv):
                     tag=8
                 elif "D/HEX scan_rssi:" in line:
                     tag=9
+                elif "D/HEX ch_rssi:" in line:
+                    tag=10                    
+                elif "D/HEX wifi_est:" in line:
+                    tag=11          
+                elif "D/HEX temp_ch:" in line:
+                    tag=12         
+                elif "D/HEX temp_ch2:" in line:
+                    tag=13         
                 else:
-                    tag=10
+                    tag=14
                     
                 
                     
@@ -1161,7 +1169,19 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         data_bytes = bytes_list    
     elif (tag==9):
         expected_bytes = 80
-        data_bytes = bytes_list            
+        data_bytes = bytes_list         
+    elif (tag==10):             # ch_rssi
+        expected_bytes = 79
+        data_bytes = bytes_list
+    elif (tag==11):
+        expected_bytes = 10
+        data_bytes = bytes_list
+    elif (tag==12):
+        expected_bytes = 10
+        data_bytes = bytes_list
+    elif (tag==13):
+        expected_bytes = 10
+        data_bytes = bytes_list        
     else:
         expected_bytes = 10000
         
