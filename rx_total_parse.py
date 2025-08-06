@@ -7,6 +7,10 @@ from collections import defaultdict
 from typing import List, Optional, Union
 from tabulate import tabulate
 
+# Summry only contain MIN_RSSI_THRESHOLD <= RSSI <= MAX_RSSI_THRESHOLD
+MAX_RSSI_THRESHOLD = -80
+MIN_RSSI_THRESHOLD = -120
+
 afh_group=0
 afh_group_count=0
 afh_error_rate=0.0
@@ -1011,8 +1015,9 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     print("=======================================================================================")    
     
     global error_rate_stat
-    if (afh_cnt_delta<2000):
-        error_rate_stat += [error_rate_cls(stats_array.get_average_rssi(-1),afh_error_rate, afh_cnt_delta)]
+    stat_rssi=stats_array.get_average_rssi(-1)
+    if (afh_cnt_delta<2000) and (afh_cnt_delta>0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD:
+        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_cnt_delta)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
