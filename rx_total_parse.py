@@ -8,7 +8,7 @@ from typing import List, Optional, Union
 from tabulate import tabulate
 
 # Summry only contain MIN_RSSI_THRESHOLD <= RSSI <= MAX_RSSI_THRESHOLD
-MAX_RSSI_THRESHOLD = -80
+MAX_RSSI_THRESHOLD = 0
 MIN_RSSI_THRESHOLD = -120
 
 afh_group=0
@@ -237,9 +237,11 @@ def parse_file(input_txt, output_csv):
                 elif "D/HEX temp_ch:" in line:
                     tag=12         
                 elif "D/HEX temp_ch2:" in line:
-                    tag=13         
+                    tag=13     
+                elif "D/HEX all_rssi:" in line:
+                    tag=14                         
                 else:
-                    tag=14
+                    tag=15
                     
                 
                     
@@ -1081,7 +1083,7 @@ def hex_to_signed_integers(hex_input):
     except ValueError as e:
         raise ValueError(f"Invalid hex format: {e}")
         
-def process_ch_scan(data_bytes, type=1):
+def process_ch_scan(data_bytes, type=1, tag=4):
     global sf_scaned_chn, sf_scaned_chns
     print("SF scanned chn:", data_bytes)
     data_bytes=hex_to_signed_integers(data_bytes)
@@ -1092,15 +1094,28 @@ def process_ch_scan(data_bytes, type=1):
         val2 = data_bytes[i + 40]
         val3 = data_bytes[i + 80]
         val4 = data_bytes[i + 120]
+        if (tag==14):
+            val5=data_bytes[i + 160]
+            val6=data_bytes[i + 200]
+            val7=data_bytes[i + 240]
+            val8=data_bytes[i + 280]
         if (type==1):
             total_mw = (10 ** (val1 / 10)) 
             total_mw += (10 ** (val2 / 10)) 
             total_mw += (10 ** (val3 / 10)) 
             total_mw += (10 ** (val4 / 10)) 
-            total_mw /= 4
+            if (tag==4):
+                total_mw /= 4
+            else:
+                total_mw += (10 ** (val5 / 10)) 
+                total_mw += (10 ** (val6 / 10)) 
+                total_mw += (10 ** (val7 / 10)) 
+                total_mw += (10 ** (val8 / 10)) 
             val=10 * math.log10(total_mw)
         else:
             val=max(val1,val2,val3,val4)    
+            if (tag==14):
+                val=max(val,val5,val6,val7,val8)    
         scaned_chn.append(val)        
     sf_scaned_chn = [int(x) for x in scaned_chn]
     sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
@@ -1200,6 +1215,9 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     elif (tag==13):             # temp_ch2
         expected_bytes = 10
         data_bytes = bytes_list        
+    elif (tag==14):             # all_rssi
+        expected_bytes = 40 * 8 + 1
+        data_bytes = bytes_list           
     else:
         expected_bytes = 10000
         
@@ -1212,8 +1230,8 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         process_rx_total(data_bytes,writer, timestr_in_line)
     elif (tag==2):
         process_ch_hist(data_bytes)
-    elif (tag==4):
-        process_ch_scan(data_bytes)
+    elif (tag==4) or (tag==14):
+        process_ch_scan(data_bytes, tag)
     elif (tag==5):
         process_afh(data_bytes)
     elif (tag==7):
