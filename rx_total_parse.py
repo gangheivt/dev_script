@@ -10,6 +10,7 @@ from tabulate import tabulate
 # Summry only contain MIN_RSSI_THRESHOLD <= RSSI <= MAX_RSSI_THRESHOLD
 MAX_RSSI_THRESHOLD = 0
 MIN_RSSI_THRESHOLD = -120
+RX_HISTORY_MAX=320
 
 afh_group=0
 afh_group_count=0
@@ -430,7 +431,7 @@ class ChannelStatsArray:
             failures[i['channel']]=i['valid_rssi_cnt']-i['rx_ok']
 
         # RX RSSI history
-        rx_hist = [0] * 320
+        rx_hist = [0] * RX_HISTORY_MAX
         j=0
         global sf_stats_rssi_hist
         for i in sf_stats_rssi_hist:
@@ -1455,7 +1456,8 @@ if __name__ == "__main__":
         db_step=5,
         delta_min=-40,
         delta_max=40,        
-        count_max=20
+        count_max=20,
+        rx_hist_max=RX_HISTORY_MAX
     )    
     # Start the visualization
     tracker.start_visualization()
