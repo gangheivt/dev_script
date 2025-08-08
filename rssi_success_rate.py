@@ -24,7 +24,8 @@ class RSSISuccessTracker:
         min_count_max: int = 40,
         subplot_heights: List[float] = [0.3, 0.3, 0.4],
         update_interval: int = 1000,
-        start_frame: int = 0
+        start_frame: int = 0,
+        rx_hist_max: int = 320
     ):
         self.byte_arrays = byte_arrays
         self.num_channels = num_channels
@@ -41,6 +42,7 @@ class RSSISuccessTracker:
         self.subplot_heights = subplot_heights
         self.update_interval = update_interval
         self.start_frame = start_frame
+        self.rx_hist_max=rx_hist_max
         
         # Animation controls
         self.animation_running = True
@@ -53,7 +55,7 @@ class RSSISuccessTracker:
         self.tk_root.withdraw()
         
         # Process data
-        self.rssi_data, self.act_rssi_data, self.success_data, self.failure_data, self.afh_ch_maps = self._process_data()
+        self.rssi_data, self.act_rssi_data, self.success_data, self.failure_data, self.afh_ch_maps, self.rssi_hist = self._process_data()
         self.delta_data = self.act_rssi_data - self.rssi_data if self.act_rssi_data is not None else None
         self.total_samples = len(self.rssi_data) if self.rssi_data is not None else 0
         
@@ -66,17 +68,18 @@ class RSSISuccessTracker:
     def _process_data(self):
         if not isinstance(self.byte_arrays, list):
             print("Error: Input must be a list of byte arrays")
-            return None, None, None, None, None
+            return None, None, None, None, None, None
             
         if len(self.byte_arrays) == 0:
             print("Error: Byte array list is empty")
-            return None, None, None, None, None
+            return None, None, None, None, None, None
 
-        total_values = self.num_channels * 5
+        total_values = self.num_channels * 5 + self.rx_hist_max
+        
         bytes_per_value = struct.calcsize(self.int_format)
         required_length = total_values * bytes_per_value
         
-        rssi_data, act_rssi_data, success_data, failure_data, afh_ch_maps = [], [], [], [], []
+        rssi_data, act_rssi_data, success_data, failure_data, afh_ch_maps, rx_hist = [], [], [], [], [], []
         for i, arr in enumerate(self.byte_arrays):
             if not isinstance(arr, (bytes, bytearray)):
                 print(f"Warning: Element {i+1} is not a byte array - skipping")
@@ -92,21 +95,23 @@ class RSSISuccessTracker:
                 act_rssi_data.append(all_values[self.num_channels:2*self.num_channels])
                 success_data.append(all_values[2*self.num_channels:3*self.num_channels])
                 failure_data.append(all_values[3*self.num_channels:4*self.num_channels])
-                afh_ch_maps.append(all_values[4*self.num_channels:])
+                afh_ch_maps.append(all_values[4*self.num_channels:5*self.num_channels])
+                rx_hist.append(all_values[5*self.num_channels:])
             except Exception as e:
                 print(f"Error unpacking byte array {i+1}: {e} - skipping")
                 continue
         
         if not rssi_data:
             print("Error: No valid RSSI data processed")
-            return None, None, None, None, None
+            return None, None, None, None, None, None
         
         return (
             np.array(rssi_data),
             np.array(act_rssi_data),
             np.array(success_data),
             np.array(failure_data),
-            np.array(afh_ch_maps)
+            np.array(afh_ch_maps),
+            np.array(rx_hist)
         )
 
     def _initialize_plot(self):

@@ -25,6 +25,7 @@ afh_ch_map=bytes(80)
 
 sf_scaned_chns=[]
 sf_stats_array=[]
+sf_stats_rssi_hist=[]
 
 class error_rate_cls:
     def __init__(self, rssi, error_rate, cnt):
@@ -356,6 +357,7 @@ class ChannelStatsArray:
             "score": 0,
             "total": 0,
             "scan" : 0,
+            "rx_hist" : [],
             "ttl":DEFAULT_TTL
         }
     
@@ -388,6 +390,8 @@ class ChannelStatsArray:
             stats["total"] += 1                     
         else:
             raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
+        global  sf_stats_rssi_hist 
+        sf_stats_rssi_hist += [item.rssi]
         stats["scan"]=sf_scaned_chn[channel]    
         self._sorted_array = sorted(
                 [stats for stats in self._array if stats["total"] > 0],
@@ -424,7 +428,16 @@ class ChannelStatsArray:
         failures = [0] * 80
         for i in self._array:
             failures[i['channel']]=i['valid_rssi_cnt']-i['rx_ok']
-            
+
+        # RX RSSI history
+        rx_hist = [0] * 320
+        j=0
+        global sf_stats_rssi_hist
+        for i in sf_stats_rssi_hist:
+            rx_hist[j] = i
+            j=j+1
+        sf_stats_rssi_hist=[]    
+        
         def list_to_bytes(int_list, signed=True):
             """将整数列表转换为字节数组"""
             byte_array = bytearray()
@@ -439,8 +452,8 @@ class ChannelStatsArray:
         bytes3 = list_to_bytes(successes, signed=False)
         bytes4 = list_to_bytes(failures, signed=False)       
         bytes5 = list_to_bytes(afh_ch_map, signed=False)       
-        print(bytes5)
-        return [bytes1+bytes2+bytes3+bytes4+bytes5]
+        bytes6 = list_to_bytes(rx_hist, signed=True)     
+        return [bytes1+bytes2+bytes3+bytes4+bytes5+bytes6]
         
     def get_average_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
@@ -995,6 +1008,7 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     for i in channels:
         stats_array.update(i)
     stats_array.clear_low_access_channels()
+    
    
     added_array, removed_array, kept_array=last_array.compare(stats_array)    
     added_array = sorted(added_array)
