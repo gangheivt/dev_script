@@ -6,6 +6,31 @@ from matplotlib.ticker import MultipleLocator
 from typing import List, Union, Optional
 import tkinter as tk
 from tkinter import simpledialog
+import matplotlib.font_manager as fm
+
+# 改进的中文字体配置 - 自动适配系统字体
+def setup_chinese_fonts():
+    # 尝试获取系统已安装的中文字体
+    chinese_fonts = ["SimHei", "Microsoft YaHei", "Arial Unicode MS", "SimSun", "NSimSun"]
+    available_fonts = []
+    
+    for font in chinese_fonts:
+        if any(font.lower() in f.lower() for f in fm.findSystemFonts()):
+            available_fonts.append(font)
+    
+    # 如果找到可用中文字体，设置它
+    if available_fonts:
+        plt.rcParams["font.family"] = available_fonts
+    else:
+        #  fallback到默认字体，使用英文显示标题
+        print("警告：未找到中文字体，将使用英文显示")
+        return False
+    
+    plt.rcParams["axes.unicode_minus"] = False  # 正确显示负号
+    return True
+
+# 初始化中文字体
+use_chinese = setup_chinese_fonts()
 
 class RSSISuccessTracker:
     def __init__(
@@ -22,7 +47,7 @@ class RSSISuccessTracker:
         count_min: int = 0,
         count_max: Optional[int] = None,
         min_count_max: int = 40,
-        subplot_heights: List[float] = [0.3, 0.3, 0.4],
+        subplot_heights: List[float] = [0.2, 0.2, 0.2, 0.4],
         update_interval: int = 1000,
         start_frame: int = 0,
         rx_hist_max: int = 320
@@ -42,20 +67,21 @@ class RSSISuccessTracker:
         self.subplot_heights = subplot_heights
         self.update_interval = update_interval
         self.start_frame = start_frame
-        self.rx_hist_max=rx_hist_max
+        self.rx_hist_max = rx_hist_max
+        self.use_chinese = use_chinese  # 传递中文字体可用性标志
         
-        # Animation controls
+        # 动画控制参数
         self.animation_running = True
         self.current_frame = 0
         self.play_direction = 1
         self.animation = None
 
-        # Tkinter setup
+        # Tkinter配置
         self.tk_root = tk.Tk()
         self.tk_root.withdraw()
         
-        # Process data
-        self.rssi_data, self.act_rssi_data, self.success_data, self.failure_data, self.afh_ch_maps, self.rssi_hist = self._process_data()
+        # 数据处理
+        self.rssi_data, self.act_rssi_data, self.success_data, self.failure_data, self.afh_ch_maps, self.rx_hist = self._process_data()
         self.delta_data = self.act_rssi_data - self.rssi_data if self.act_rssi_data is not None else None
         self.total_samples = len(self.rssi_data) if self.rssi_data is not None else 0
         
@@ -63,30 +89,29 @@ class RSSISuccessTracker:
             self._initialize_plot()
             self.set_current_frame(self.start_frame)
         else:
-            print("No valid data to visualize")
+            print("没有可可视化的有效数据" if use_chinese else "No valid data to visualize")
 
     def _process_data(self):
         if not isinstance(self.byte_arrays, list):
-            print("Error: Input must be a list of byte arrays")
+            print("错误：输入必须是字节数组列表" if self.use_chinese else "Error: Input must be a list of byte arrays")
             return None, None, None, None, None, None
             
         if len(self.byte_arrays) == 0:
-            print("Error: Byte array list is empty")
+            print("错误：字节数组列表为空" if self.use_chinese else "Error: Byte array list is empty")
             return None, None, None, None, None, None
 
         total_values = self.num_channels * 5 + self.rx_hist_max
-        
         bytes_per_value = struct.calcsize(self.int_format)
         required_length = total_values * bytes_per_value
         
         rssi_data, act_rssi_data, success_data, failure_data, afh_ch_maps, rx_hist = [], [], [], [], [], []
         for i, arr in enumerate(self.byte_arrays):
             if not isinstance(arr, (bytes, bytearray)):
-                print(f"Warning: Element {i+1} is not a byte array - skipping")
+                print(f"警告：第{i+1}个元素不是字节数组 - 已跳过" if self.use_chinese else f"Warning: Element {i+1} is not a byte array - skipping")
                 continue
                 
             if len(arr) != required_length:
-                print(f"Warning: Byte array {i+1} has invalid length {len(arr)} (expected {required_length}) - skipping")
+                print(f"警告：第{i+1}个字节数组长度无效（{len(arr)}），预期长度为{required_length} - 已跳过" if self.use_chinese else f"Warning: Byte array {i+1} has invalid length {len(arr)} (expected {required_length}) - skipping")
                 continue
                 
             try:
@@ -98,11 +123,11 @@ class RSSISuccessTracker:
                 afh_ch_maps.append(all_values[4*self.num_channels:5*self.num_channels])
                 rx_hist.append(all_values[5*self.num_channels:])
             except Exception as e:
-                print(f"Error unpacking byte array {i+1}: {e} - skipping")
+                print(f"解析第{i+1}个字节数组时出错：{e} - 已跳过" if self.use_chinese else f"Error unpacking byte array {i+1}: {e} - skipping")
                 continue
         
         if not rssi_data:
-            print("Error: No valid RSSI data processed")
+            print("错误：未处理到有效的RSSI数据" if self.use_chinese else "Error: No valid RSSI data processed")
             return None, None, None, None, None, None
         
         return (
@@ -115,27 +140,26 @@ class RSSISuccessTracker:
         )
 
     def _initialize_plot(self):
-        self.fig, (self.ax_scan_rssi, self.ax_delta, self.ax_success) = plt.subplots(
-            3, 1, figsize=(16, 16), sharex=True,
+        self.fig, (self.ax_scan_rssi, self.ax_delta, self.ax_success, self.ax_rx_hist) = plt.subplots(
+            4, 1, figsize=(16, 20), sharex=False,
             gridspec_kw={'height_ratios': self.subplot_heights}
         )
-        self.fig.subplots_adjust(top=0.95, hspace=0.2)
+        self.fig.subplots_adjust(top=0.95, hspace=0.3)
         
         try:
-            self.fig.canvas.manager.set_window_title('RSSI Tracker')
+            if self.use_chinese:
+                self.fig.canvas.manager.set_window_title('RSSI跟踪器（含RX历史）')
+            else:
+                self.fig.canvas.manager.set_window_title('RSSI Tracker (with RX History)')
         except AttributeError:
             pass
         
-        # CRITICAL FIX: Disable matplotlib's default 's' save shortcut
         self.fig.canvas.mpl_disconnect(self.fig.canvas.manager.key_press_handler_id)
-        
-        # Connect our custom event handler
         self.fig.canvas.mpl_connect('button_press_event', self._on_click)
         self.fig.canvas.mpl_connect('key_press_event', self._on_key_press)
         
         self.channels = np.arange(1, self.num_channels + 1)
         
-        # Calculate count max
         if self.count_max is None:
             max_success = self.success_data.max() if len(self.success_data) else 0
             max_failure = self.failure_data.max() if len(self.failure_data) else 0
@@ -143,59 +167,84 @@ class RSSISuccessTracker:
         else:
             self.count_max = max(self.count_max, self.min_count_max)
         
-        # 1. Scanned RSSI Subplot
+        # 1. 扫描RSSI子图
         self.scan_rssi_bars = self.ax_scan_rssi.bar(
             self.channels, np.zeros(self.num_channels), 
-            color='blue', alpha=0.8, label='Scanned RSSI (dBm)'
+            color='blue', alpha=0.8, label='扫描RSSI (dBm)' if self.use_chinese else 'Scanned RSSI (dBm)'
         )
         self.ax_scan_rssi.set_ylim(self.db_min, self.db_max)
         self.ax_scan_rssi.yaxis.set_major_locator(MultipleLocator(self.db_step))
         self.ax_scan_rssi.grid(axis='y', linestyle='-', alpha=0.7)
         self.ax_scan_rssi.set_ylabel('RSSI (dBm)', fontweight='bold')
         self.ax_scan_rssi.legend(loc='upper right')
-        self.ax_scan_rssi.set_title('Scanned RSSI by Channel', fontweight='bold')
+        self.ax_scan_rssi.set_title('各通道扫描RSSI' if self.use_chinese else 'Scanned RSSI by Channel', fontweight='bold')
         
-        # 2. Delta Subplot
+        # 2. 差值子图
         self.delta_bars = self.ax_delta.bar(
             self.channels, np.zeros(self.num_channels), 
-            alpha=0.8, label='Delta (Actual - Scanned)'
+            alpha=0.8, label='差值（实际-扫描）' if self.use_chinese else 'Delta (Actual - Scanned)'
         )
         self.ax_delta.set_ylim(self.delta_min, self.delta_max)
         self.ax_delta.yaxis.set_major_locator(MultipleLocator(self.delta_step))
         self.ax_delta.grid(axis='y', linestyle='-', alpha=0.7)
         self.ax_delta.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-        self.ax_delta.set_ylabel('Delta (dBm)', fontweight='bold')
+        self.ax_delta.set_ylabel('差值 (dBm)' if self.use_chinese else 'Delta (dBm)', fontweight='bold')
         self.ax_delta.legend(loc='upper right')
-        self.ax_delta.set_title('RSSI Difference', fontweight='bold')
+        self.ax_delta.set_title('RSSI差值' if self.use_chinese else 'RSSI Difference', fontweight='bold')
         
-        # 3. Success/Failure Subplot
+        # 3. 成功/失败计数子图
         self.success_container = None
         self.failure_container = None
         self.ax_success.set_ylim(self.count_min, self.count_max)
         self.ax_success.yaxis.set_major_locator(MultipleLocator(5))
         self.ax_success.grid(axis='y', linestyle='-', alpha=0.7)
-        self.ax_success.set_xlabel('Channel Number', fontweight='bold')
-        self.ax_success.set_ylabel('Count', fontweight='bold')
+        self.ax_success.set_xlabel('通道编号' if self.use_chinese else 'Channel Number', fontweight='bold')
+        self.ax_success.set_ylabel('计数' if self.use_chinese else 'Count', fontweight='bold')
         self.ax_success.set_xticks(self.channels[::5])
-        self.ax_success.set_title('Success/Failure Counts', fontweight='bold')
-        self.ax_success.bar([], [], color='#4CAF50', label='Success')
-        self.ax_success.bar([], [], color='#F44336', label='Failure')
+        self.ax_success.set_title('成功/失败计数' if self.use_chinese else 'Success/Failure Counts', fontweight='bold')
+        self.ax_success.bar([], [], color='#4CAF50', label='成功' if self.use_chinese else 'Success')
+        self.ax_success.bar([], [], color='#F44336', label='失败' if self.use_chinese else 'Failure')
         self.ax_success.legend(loc='upper right')
         
-        # Main title and instructions
+        # 4. RX历史子图
+        self.rx_hist_line, = self.ax_rx_hist.plot([], [], color='teal', linewidth=1.5, 
+                                                alpha=0.8, marker='o', markersize=3)
+        self.ax_rx_hist.set_ylim(-100, -30)
+        self.ax_rx_hist.set_xlim(0, self.rx_hist_max - 1)
+        self.ax_rx_hist.xaxis.set_major_locator(MultipleLocator(50))
+        self.ax_rx_hist.grid(axis='both', linestyle='-', alpha=0.7)
+        self.ax_rx_hist.set_xlabel('RX历史索引' if self.use_chinese else 'RX History Index', fontweight='bold')
+        self.ax_rx_hist.set_ylabel('值 (dBm)' if self.use_chinese else 'Value (dBm)', fontweight='bold')
+        self.ax_rx_hist.set_title('接收历史（仅显示非零值）' if self.use_chinese else 'Receiver History (Non-Zero Values Only)', fontweight='bold')
+        self.ax_rx_hist.legend(['RX历史数据' if self.use_chinese else 'RX History Data'])
+        
+        # 主标题和操作说明
         self.main_title = self.fig.suptitle(
             self._get_status_text(), fontsize=16, fontweight='bold'
         )
-        self.instruction_text = self.fig.text(
-            0.5, 0.01,
-            "Click: Pause/Resume | →: Forward | ←: Reverse | s: Set current frame",
-            ha='center', style='italic'
-        )
+        
+        if self.use_chinese:
+            self.instruction_text = self.fig.text(
+                0.5, 0.01,
+                "点击：暂停/继续 | →：前进 | ←：后退 | s：设置当前帧",
+                ha='center', style='italic'
+            )
+        else:
+            self.instruction_text = self.fig.text(
+                0.5, 0.01,
+                "Click: Pause/Resume | →: Forward | ←: Reverse | s: Set current frame",
+                ha='center', style='italic'
+            )
 
     def _get_status_text(self):
-        status = "Running" if self.animation_running else "Paused"
-        direction = "Forward" if self.play_direction == 1 else "Reverse"
-        return f'Frame {self.current_frame + 1}/{self.total_samples} | {status} | {direction}'
+        if self.use_chinese:
+            status = "运行中" if self.animation_running else "已暂停"
+            direction = "正向" if self.play_direction == 1 else "反向"
+            return f'帧 {self.current_frame + 1}/{self.total_samples} | {status} | {direction}'
+        else:
+            status = "Running" if self.animation_running else "Paused"
+            direction = "Forward" if self.play_direction == 1 else "Reverse"
+            return f'Frame {self.current_frame + 1}/{self.total_samples} | {status} | {direction}'
 
     def _on_click(self, event):
         if event.inaxes is None:
@@ -208,51 +257,67 @@ class RSSISuccessTracker:
         self.fig.canvas.draw_idle()
 
     def _on_key_press(self, event):
-        # Explicitly handle only our keys
         if event.key in ['right', 'f']:
             self.play_direction = 1
         elif event.key in ['left', 'r']:
             self.play_direction = -1
-        elif event.key == 's':  # Only set current frame
+        elif event.key == 's':
             self.set_current_frame()
-            return  # Prevent any other handling of 's'
+            return
         self.main_title.set_text(self._get_status_text())
         self.fig.canvas.draw_idle()
 
     def set_current_frame(self, frame_num: Optional[int] = None):
-        """Set current frame with dialog - NO SAVE FUNCTIONALITY"""
         if self.total_samples == 0:
             return
 
         if frame_num is None:
-            # Only show frame input dialog
-            user_input = simpledialog.askstring(
-                title="Set Current Frame",
-                prompt=f"Enter frame (1 to {self.total_samples}, current: {self.current_frame + 1}):",
-                parent=self.tk_root
-            )
-            if not user_input:  # User canceled or empty input
-                return
-            try:
-                frame_num = int(user_input) - 1  # Convert to 0-based index
-            except ValueError:
-                simpledialog.showerror(
-                    title="Invalid Input",
-                    message="Please enter a valid integer.",
+            if self.use_chinese:
+                user_input = simpledialog.askstring(
+                    title="设置当前帧",
+                    prompt=f"请输入帧号（1到{self.total_samples}，当前：{self.current_frame + 1}）：",
                     parent=self.tk_root
                 )
+            else:
+                user_input = simpledialog.askstring(
+                    title="Set Current Frame",
+                    prompt=f"Enter frame (1 to {self.total_samples}, current: {self.current_frame + 1}):",
+                    parent=self.tk_root
+                )
+            if not user_input:
+                return
+            try:
+                frame_num = int(user_input) - 1
+            except ValueError:
+                if self.use_chinese:
+                    simpledialog.showerror(
+                        title="输入无效",
+                        message="请输入有效的整数。",
+                        parent=self.tk_root
+                    )
+                else:
+                    simpledialog.showerror(
+                        title="Invalid Input",
+                        message="Please enter a valid integer.",
+                        parent=self.tk_root
+                    )
                 return
 
-        # Validate frame range
         if not (0 <= frame_num < self.total_samples):
-            simpledialog.showerror(
-                title="Invalid Frame",
-                message=f"Frame must be between 1 and {self.total_samples}.",
-                parent=self.tk_root
-            )
+            if self.use_chinese:
+                simpledialog.showerror(
+                    title="帧号无效",
+                    message=f"帧号必须在1到{self.total_samples}之间。",
+                    parent=self.tk_root
+                )
+            else:
+                simpledialog.showerror(
+                    title="Invalid Frame",
+                    message=f"Frame must be between 1 and {self.total_samples}.",
+                    parent=self.tk_root
+                )
             return
 
-        # Update frame and refresh plot
         self.current_frame = frame_num
         self._update_plot(None)
         self.main_title.set_text(self._get_status_text())
@@ -264,14 +329,14 @@ class RSSISuccessTracker:
             0, self.total_samples - 1
         )
         
-        # Update RSSI bars
+        # 更新RSSI柱状图
         current_rssi = self.rssi_data[self.current_frame]
         current_afh = self.afh_ch_maps[self.current_frame]
         for i, (bar, val) in enumerate(zip(self.scan_rssi_bars, current_rssi)):
             bar.set_height(val)
             bar.set_color('purple' if current_afh[i] == 1 else 'blue')
         
-        # Update delta bars
+        # 更新差值柱状图
         current_delta = self.delta_data[self.current_frame]
         current_success = self.success_data[self.current_frame]
         current_failure = self.failure_data[self.current_frame]
@@ -286,7 +351,7 @@ class RSSISuccessTracker:
                 self.delta_bars[i].set_height(0)
                 self.delta_bars[i].set_alpha(0)
         
-        # Update success/failure bars
+        # 更新成功/失败柱状图
         if self.success_container:
             for bar in self.success_container + self.failure_container:
                 bar.remove()
@@ -297,9 +362,17 @@ class RSSISuccessTracker:
             self.channels, current_failure, color='#F44336', alpha=0.8, bottom=current_success
         )
         
+        # 更新RX历史图
+        current_rx_hist = self.rx_hist[self.current_frame]
+        non_zero_mask = current_rx_hist != 0
+        non_zero_indices = np.where(non_zero_mask)[0]
+        non_zero_values = current_rx_hist[non_zero_mask]
+        self.rx_hist_line.set_data(non_zero_indices, non_zero_values)
+        
         self.main_title.set_text(self._get_status_text())
         return (list(self.scan_rssi_bars) + list(self.delta_bars) +
-                list(self.success_container) + list(self.failure_container))
+                list(self.success_container) + list(self.failure_container) +
+                [self.rx_hist_line])
 
     def start_visualization(self):
         if self.total_samples == 0:
@@ -311,11 +384,11 @@ class RSSISuccessTracker:
         )
         plt.show()
 
-# Example usage
+# 示例用法
 if __name__ == "__main__":
     import random
     
-    def generate_sample_data(num_samples=15, num_channels=80):
+    def generate_sample_data(num_samples=15, num_channels=80, rx_hist_max=320):
         sample_arrays = []
         for _ in range(num_samples):
             rssi = [random.randint(-95, -30) for _ in range(num_channels)]
@@ -323,7 +396,15 @@ if __name__ == "__main__":
             successes = [random.randint(0, 35) for _ in range(num_channels)]
             failures = [random.randint(0, 15) for _ in range(num_channels)]
             afh_map = [random.randint(0, 1) for _ in range(num_channels)]
-            all_vals = rssi + act_rssi + successes + failures + afh_map
+            
+            rx_hist = []
+            for _ in range(rx_hist_max):
+                if random.random() < 0.3:
+                    rx_hist.append(0)
+                else:
+                    rx_hist.append(random.randint(-100, -30))
+            
+            all_vals = rssi + act_rssi + successes + failures + afh_map + rx_hist
             sample_arrays.append(struct.pack(f'{len(all_vals)}b', *all_vals))
         return sample_arrays
     
@@ -331,6 +412,7 @@ if __name__ == "__main__":
         generate_sample_data(),
         min_count_max=80,
         update_interval=800,
-        start_frame=4
+        start_frame=4,
+        rx_hist_max=320
     )
     tracker.start_visualization()
