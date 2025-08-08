@@ -392,7 +392,8 @@ class ChannelStatsArray:
         else:
             raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
         global  sf_stats_rssi_hist 
-        sf_stats_rssi_hist += [item.rssi]
+        if (item.sync_err==0):
+            sf_stats_rssi_hist += [item.rssi]
         stats["scan"]=sf_scaned_chn[channel]    
         self._sorted_array = sorted(
                 [stats for stats in self._array if stats["total"] > 0],
@@ -1009,8 +1010,7 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     for i in channels:
         stats_array.update(i)
     stats_array.clear_low_access_channels()
-    
-   
+       
     added_array, removed_array, kept_array=last_array.compare(stats_array)    
     added_array = sorted(added_array)
     removed_array = sorted(removed_array)
