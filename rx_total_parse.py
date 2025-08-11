@@ -444,8 +444,13 @@ class ChannelStatsArray:
             """将整数列表转换为字节数组"""
             byte_array = bytearray()
             for num in int_list:
-                # 将每个整数转换为1字节，并添加到字节数组中
-                byte_array.extend(num.to_bytes(1,byteorder='big',signed=signed))
+                # 将每个整数转换为1字节，并添加到字节数组中                
+                try:
+                    byte_array.extend(num.to_bytes(1,byteorder='big',signed=signed))
+                except:
+                    print("??? num")
+                    num=-80
+                    byte_array.extend(num.to_bytes(1,byteorder='big',signed=signed))                    
             return byte_array
 
         # 转换每组数据（list1有负数，需要signed=True）
