@@ -38,6 +38,26 @@ class error_rate_cls:
     
     def __lt__(self, other):
         return self.rssi < other.rssi
+
+def get_signed_byte(byte_array, index):
+    """
+    从字节数组中获取指定索引位置的有符号字节
+    
+    参数:
+        byte_array: 字节数组
+        index: 要获取的字节索引
+        
+    返回:
+        有符号字节值（范围：-128 到 127）
+    """
+    # 获取无符号字节值（0-255）
+    unsigned_byte = byte_array[index]
+    
+    # 转换为有符号字节
+    if unsigned_byte > 127:
+        return unsigned_byte - 256
+    else:
+        return unsigned_byte
         
 def update_average_dbm(existing_avg_dbm: float, existing_count: int, 
                        new_avg_dbm: float, new_count: int) -> float:
@@ -1450,6 +1470,37 @@ if __name__ == "__main__":
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
+
+
+    channel_stats_array = ChannelStatsArray(max_channel=79)    
+    for j in range(79):
+        stat=channel_stats_array._array[j];
+        stat["channel"] = j
+        for i in sf_stats_array:
+            act_rssi=get_signed_byte(i,80+j)
+            if (act_rssi<= MAX_RSSI_THRESHOLD and act_rssi >= MIN_RSSI_THRESHOLD):
+                stat["rx_ok"] += i[160+j]
+                stat["total"] += i[160+j]+i[240+j]
+            
+    # 转换为表格数据
+    table_data = []
+    for item in channel_stats_array._array:
+        channel=item['channel']
+        rx_ok = item['rx_ok']
+        total = item['total']    
+        # 处理除零情况
+        if total == 0:
+            success_rate = "N/A"  # 或者 0.0%
+        else:
+            success_rate = f"{rx_ok / total:.2%}"
+        table_data.append([f"{channel}", f"{rx_ok}", f"{total}", success_rate])
+    # 使用 tabulate 打印表格
+    print(tabulate(
+        table_data,
+        headers=["Channel","RX OK", "Total", "Success Rate"],
+        tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
+        floatfmt=".2f"
+    ))
     
     total_error_rate=0
     total_cnt=0
@@ -1463,6 +1514,7 @@ if __name__ == "__main__":
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
     print("Average RSSI %.4fdbm" %(combined_avg_dbm))
 
+    
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
     
