@@ -10,7 +10,7 @@ from tabulate import tabulate
 # Summry only contain MIN_RSSI_THRESHOLD <= RSSI <= MAX_RSSI_THRESHOLD
 MAX_RSSI_THRESHOLD = 0
 MIN_RSSI_THRESHOLD = -120
-RX_HISTORY_MAX=320
+RX_HISTORY_MAX=1600
 
 afh_group=0
 afh_group_count=0
@@ -1235,13 +1235,16 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     """处理一个完整数据块并写入CSV"""
     
     # 计算预期总字节数 = 2(组数字节) + total_groups * 4
-    if (tag==1 or tag==3):      # 1== 'rx total:' 3=='si_ch_ass'
+    if (tag==1):      # 1== 'rx total:' 
         expected_bytes = 2 + total_groups * 4
         # 跳过前2个组数字节，从第3个字节开始
         data_bytes = bytes_list[2:expected_bytes]
     elif (tag==2):              # ch_hist
         expected_bytes = 79 * 8
         data_bytes = bytes_list
+    elif (tag==3):              # si_ch_ass
+        expected_bytes = 480
+        data_bytes = bytes_list            
     elif (tag==4):              # all_scan
         expected_bytes = 40 * 4 + 1
         data_bytes = bytes_list
