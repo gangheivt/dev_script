@@ -16,6 +16,7 @@ afh_group=0
 afh_group_count=0
 afh_error_rate=0.0
 afh_cnt_delta =0
+afh_ok_cnt_delta = 0
 channel_score_hist=[]
 
 DEFAULT_RX_OK_RATE=0.4
@@ -29,9 +30,10 @@ sf_stats_array=[]
 sf_stats_rssi_hist=[]
 
 class error_rate_cls:
-    def __init__(self, rssi, error_rate, cnt):
+    def __init__(self, rssi, error_rate, ok_cnt, cnt):
         self.rssi = rssi
         self.error_rate = error_rate
+        self.ok_cnt = ok_cnt
         self.cnt=cnt
     
     def __lt__(self, other):
@@ -182,6 +184,7 @@ def parse_file(input_txt, output_csv):
     current_error=0
     last_total=0
     last_error=0
+    last_ok=0
     tag=0
     index=1
     with open(input_txt, 'r') as infile, open(output_csv, 'w', newline='') as outfile:
@@ -191,18 +194,21 @@ def parse_file(input_txt, output_csv):
         for line_number, line in enumerate(infile, start = 1):
                
             if "afh_sco_data_stats" in line:
-                global afh_error_rate, afh_cnt_delta
+                global afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta
                 words = re.split(r'[,\s]+', line)
                 current_total = int(words[3])
                 current_error = int(words[4])
+                current_ok = current_total - current_error
                 if ((current_total-last_total)==0):
                     print("afh_sco_data_stats: line",line_number, current_total, last_total )
                 else:
                     afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
                 print("afh_error_rate: ", afh_error_rate*100, current_total-last_total)
                 afh_cnt_delta=current_total-last_total
+                afh_ok_cnt_delta= current_ok - last_ok
                 last_total=current_total
                 last_error=current_error    
+                last_ok=current_ok
                 
             # 检测块开始：行中包含"D/HEX sco rssi:"
             if "D/HEX" in line:
@@ -480,6 +486,16 @@ class ChannelStatsArray:
             stats = self.get(channel)
             return stats["rssi"]
 
+    def get_rx_ok_total(self, channel: int) -> int:
+        if (channel<0):
+            total_cnt=0
+            for i in self._array:
+                total_cnt += i["rx_ok"]
+            return total_cnt
+        else:
+            stats = self.get_channel_stats(channel)
+            return stats["rx_ok"]        
+        
     def get_rx_ok_rate(self, channel: int) -> float:
         """计算指定信道的接收成功率"""
         stats = self.get_channel_stats(channel)
@@ -1038,8 +1054,9 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     
     global error_rate_stat
     stat_rssi=stats_array.get_average_rssi(-1)
+    ok_cnt=stats_array.get_rx_ok_total(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD:
-        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_cnt_delta)]
+        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1422,14 +1439,14 @@ if __name__ == "__main__":
     error_rate_sorted = sorted(error_rate_stat, key=lambda p: p.rssi)
     # 转换为表格数据
     table_data = [
-        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.cnt}"]
+        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.ok_cnt}", f"{item.cnt}"]
             for item in error_rate_sorted
     ]
 
     # 使用 tabulate 打印表格
     print(tabulate(
         table_data,
-        headers=["RSSI (dBm)", "Error Rate", "cnt"],
+        headers=["RSSI (dBm)", "Error Rate", "rx_ok", "cnt"],
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
