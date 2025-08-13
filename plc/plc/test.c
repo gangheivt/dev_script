@@ -7,6 +7,7 @@
 #include <mmsystem.h>
 #include <math.h>
 #include "plc.h"
+#include "audio_msbc_plc.h"
 #include <time.h>
 
 // 配置参数（可根据需要调整）
@@ -120,7 +121,8 @@ int linear_resample(const int16_t* input, int input_samples,
 
 /* WAV文件初始化（保持原逻辑） */
 bool init_wav_input(const char* wav_path) {
-    wav_file = fopen(wav_path, "rb");
+    wav_file = NULL;
+    fopen_s(&wav_file, wav_path, "rb");
     if (!wav_file) {
         printf("Failed to open WAV file: %s\n", wav_path);
         return false;
@@ -396,6 +398,7 @@ void write_wav(const char* path, const int16_t* pcm, int total_samples, int samp
 int16_t ref_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 };    // 参考音频
 int16_t with_plc_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 有PLC
 int16_t without_plc_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 无PLC
+int16_t with_plc_pcm_g711[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 有PLC
 
 int main() {
 
@@ -403,10 +406,13 @@ int main() {
     int total_samples = 0;
     AudioFrame history = { 0 };
     AudioFrame output;
+    LowcFE_c g711_lpc = { 0 };
 
     const int MAX_RAW_SAMPLES = 4096;  // 根据需要调整大小
     int16_t* raw_pcm_buf = malloc(MAX_RAW_SAMPLES * sizeof(int16_t));
     int16_t* mono_pcm_buf = malloc(MAX_RAW_SAMPLES * sizeof(int16_t));
+
+    cvsd_g711plc_construct(&g711_lpc);
 
     if (!raw_pcm_buf || !mono_pcm_buf) {
         printf("Memory allocation failed\n");
@@ -430,7 +436,7 @@ int main() {
         int samples_read = read_wav_8khz(history.pcm, FRAME_SIZE, raw_pcm_buf, mono_pcm_buf, MAX_RAW_SAMPLES);
         if (samples_read < FRAME_SIZE) break;
 
-        bool is_lost = (rand() % 100) > 90;
+        bool is_lost = (rand() % 100) > 80;
         loss_count = is_lost ? loss_count + 1 : 0;
 
         // 1. 参考音频（无丢包）
@@ -442,13 +448,24 @@ int main() {
 
         // 3. 无PLC的输出（丢包时用静音替代）
         int16_t no_plc_output[FRAME_SIZE];
+        int16_t g711_pcm[FRAME_SIZE];
         if (is_lost) {
             memset(no_plc_output, 0, FRAME_SIZE * sizeof(int16_t)); // 静音
+            memset(g711_pcm, 0, FRAME_SIZE * sizeof(int16_t)); // 静音
         }
         else {
             memcpy(no_plc_output, history.pcm, FRAME_SIZE * sizeof(int16_t));
+            memcpy(g711_pcm, history.pcm, FRAME_SIZE * sizeof(int16_t));
         }
         memcpy(&without_plc_pcm[frame_idx * FRAME_SIZE], no_plc_output, FRAME_SIZE * sizeof(int16_t));
+        //4. g711 plc
+        if (is_lost) {
+            g711plc_dofe(&g711_lpc, (uint8_t*)g711_pcm);
+        }
+        else {
+            g711plc_addtohistory(&g711_lpc, (uint8_t*)g711_pcm);
+        }
+        memcpy(&with_plc_pcm_g711[frame_idx * FRAME_SIZE], g711_pcm, FRAME_SIZE * sizeof(int16_t));
 
         frame_idx++;
         total_samples += FRAME_SIZE;
@@ -458,5 +475,6 @@ int main() {
     write_wav("reference.wav", ref_pcm, total_samples, SAMPLE_RATE);
     write_wav("with_plc.wav", with_plc_pcm, total_samples, SAMPLE_RATE);
     write_wav("without_plc.wav", without_plc_pcm, total_samples, SAMPLE_RATE);
+    write_wav("with_plc_g711.wav", with_plc_pcm_g711, total_samples, SAMPLE_RATE);
 }
 #endif
