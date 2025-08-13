@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
+
 import argparse
 from scipy.io import wavfile
 from pesq import pesq
 
-def calculate_pesq(reference_path, test_path, sample_rate=16000):
+def calculate_pesq(reference_path, test_path, sample_rate=8000):
     """
     计算参考音频和测试音频之间的PESQ分数
     
@@ -41,8 +43,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='计算两个WAV文件的PESQ分数')
     parser.add_argument('reference', help='参考音频WAV文件路径')
     parser.add_argument('test', help='测试音频WAV文件路径')
-    parser.add_argument('--sample-rate', type=int, default=16000, 
+    parser.add_argument('--sample-rate', type=int, default=8000, 
                       help='采样率（默认16000 Hz，支持8000或16000）')
+    parser.add_argument('--path', type=str, default="", 
+                      help='wav生成目录')
     
     args = parser.parse_args()
     

@@ -24,9 +24,15 @@
     <ClCompile Include="fft.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="audio_msbc_plc.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="plc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="audio_msbc_plc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

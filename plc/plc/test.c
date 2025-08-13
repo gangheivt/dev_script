@@ -7,6 +7,7 @@
 #include <mmsystem.h>
 #include <math.h>
 #include "plc.h"
+#include "audio_msbc_plc.h"
 #include <time.h>
 
 // 配置参数（可根据需要调整）
@@ -120,7 +121,8 @@ int linear_resample(const int16_t* input, int input_samples,
 
 /* WAV文件初始化（保持原逻辑） */
 bool init_wav_input(const char* wav_path) {
-    wav_file = fopen(wav_path, "rb");
+    wav_file = NULL;
+    fopen_s(&wav_file, wav_path, "rb");
     if (!wav_file) {
         printf("Failed to open WAV file: %s\n", wav_path);
         return false;
@@ -162,7 +164,7 @@ int read_wav_8khz(int16_t* output, int max_samples, int16_t* raw_pcm_buf, int16_
     }
 
     static cnt = 0;
-    printf("%d\n", cnt++);
+    printf("%d", cnt++);
     // 读取原始PCM数据（复用预分配缓冲区）
     size_t bytes_read = fread(raw_pcm_buf, sizeof(int16_t), samples_needed * wav_channels, wav_file);
     if (bytes_read < samples_needed * wav_channels) {
@@ -396,17 +398,35 @@ void write_wav(const char* path, const int16_t* pcm, int total_samples, int samp
 int16_t ref_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 };    // 参考音频
 int16_t with_plc_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 有PLC
 int16_t without_plc_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 无PLC
+int16_t with_plc_pcm_g711[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 有PLC
 
-int main() {
 
+int main(int argc, char * argv[]) 
+{
+    int rate=30;
     int loss_count = 0;
     int total_samples = 0;
     AudioFrame history = { 0 };
     AudioFrame output;
+    LowcFE_c g711_lpc = { 0 };
 
     const int MAX_RAW_SAMPLES = 4096;  // 根据需要调整大小
     int16_t* raw_pcm_buf = malloc(MAX_RAW_SAMPLES * sizeof(int16_t));
     int16_t* mono_pcm_buf = malloc(MAX_RAW_SAMPLES * sizeof(int16_t));
+
+    cvsd_g711plc_construct(&g711_lpc);
+
+    if (argc > 1) {
+        rate = atoi(argv[1]);
+        if (rate>100 || rate<0)
+            printf("Lost rate must between 0-100\n");
+        else
+            printf("Lost rate %d%%\n", rate);
+    }
+    else {
+        printf("Usage: plc <lost rate in percentage>\n");
+        exit(-1);
+    }
 
     if (!raw_pcm_buf || !mono_pcm_buf) {
         printf("Memory allocation failed\n");
@@ -430,7 +450,7 @@ int main() {
         int samples_read = read_wav_8khz(history.pcm, FRAME_SIZE, raw_pcm_buf, mono_pcm_buf, MAX_RAW_SAMPLES);
         if (samples_read < FRAME_SIZE) break;
 
-        bool is_lost = (rand() % 100) > 90;
+        bool is_lost = (rand()%100)<rate;
         loss_count = is_lost ? loss_count + 1 : 0;
 
         // 1. 参考音频（无丢包）
@@ -442,21 +462,52 @@ int main() {
 
         // 3. 无PLC的输出（丢包时用静音替代）
         int16_t no_plc_output[FRAME_SIZE];
+        int16_t g711_pcm[FRAME_SIZE];
         if (is_lost) {
+            printf(":Droped\n");
             memset(no_plc_output, 0, FRAME_SIZE * sizeof(int16_t)); // 静音
+            memset(g711_pcm, 0, FRAME_SIZE * sizeof(int16_t)); // 静音
         }
         else {
+            printf("\n");
             memcpy(no_plc_output, history.pcm, FRAME_SIZE * sizeof(int16_t));
+            memcpy(g711_pcm, history.pcm, FRAME_SIZE * sizeof(int16_t));
         }
         memcpy(&without_plc_pcm[frame_idx * FRAME_SIZE], no_plc_output, FRAME_SIZE * sizeof(int16_t));
+        //4. g711 plc
+        if (is_lost) {
+
+            g711plc_dofe(&g711_lpc, (uint8_t*)g711_pcm);
+        }
+        else {
+            g711plc_addtohistory(&g711_lpc, (uint8_t*)g711_pcm);
+        }
+        memcpy(&with_plc_pcm_g711[frame_idx * FRAME_SIZE], g711_pcm, FRAME_SIZE * sizeof(int16_t));
 
         frame_idx++;
         total_samples += FRAME_SIZE;
     }
 
     // 循环结束后写入文件
+    char fn_plc[80];
+    char fn_plc_g711[80];
+    char fn_no_plc[80];
+
+    strcpy(fn_plc, "log\\");
+    strcat(fn_plc, argv[1]);
+    strcat(fn_plc, "_with_plc.wav");
+
+    strcpy(fn_plc_g711, "log\\");
+    strcat(fn_plc_g711, argv[1]);
+    strcat(fn_plc_g711, "_with_plc_g711.wav");
+
+    strcpy(fn_no_plc, "log\\");
+    strcat(fn_no_plc, argv[1]);
+    strcat(fn_no_plc, "_without_plc.wav");
+
     write_wav("reference.wav", ref_pcm, total_samples, SAMPLE_RATE);
-    write_wav("with_plc.wav", with_plc_pcm, total_samples, SAMPLE_RATE);
-    write_wav("without_plc.wav", without_plc_pcm, total_samples, SAMPLE_RATE);
+    write_wav(fn_plc, with_plc_pcm, total_samples, SAMPLE_RATE);
+    write_wav(fn_no_plc, without_plc_pcm, total_samples, SAMPLE_RATE);
+    write_wav(fn_plc_g711, with_plc_pcm_g711, total_samples, SAMPLE_RATE);
 }
 #endif

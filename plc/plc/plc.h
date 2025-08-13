@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 // 常量定义（根据实际场景调整）
-#define FRAME_SIZE 160          // 帧大小（8kHz采样率下20ms）
+#define FRAME_SIZE 60          // 帧大小（8kHz采样率下7.5ms）
 #define SAMPLE_RATE 8000        // 采样率（Hz）
 #define MAX_LPC_ORDER 12        // 最大LPC阶数（动态调整）
 #define MIN_LPC_ORDER 4         // 最小LPC阶数
