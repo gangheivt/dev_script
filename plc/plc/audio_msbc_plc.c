@@ -58,7 +58,7 @@ void msbc_g711plc_construct(LowcFE_c *lc)
 void cvsd_g711plc_construct(LowcFE_c *lc)
 {
     lc->pitch_min = 40;      /* minimum allowed pitch, 200 Hz */
-    lc->pitch_max = 240;     /* maximum allowed pitch, 66 Hz */
+    lc->pitch_max = 120;     /* maximum allowed pitch, 66 Hz */
     lc->pitchdiff = (lc->pitch_max - lc->pitch_min);
     lc->poverlapmax = (lc->pitch_max >> 2);        /* maximum pitch ola window */
     lc->historylen = (lc->pitch_max * 3 + lc->poverlapmax);   /* history buffer length */
