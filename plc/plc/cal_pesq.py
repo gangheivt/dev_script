@@ -43,16 +43,28 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='计算两个WAV文件的PESQ分数')
     parser.add_argument('reference', help='参考音频WAV文件路径')
     parser.add_argument('test', help='测试音频WAV文件路径')
+    parser.add_argument('test2', help='测试音频WAV文件路径2')
+    parser.add_argument('--error_rate', type=int, default=0, 
+                      help='Error rate between 0-100')
     parser.add_argument('--sample-rate', type=int, default=8000, 
                       help='采样率（默认16000 Hz，支持8000或16000）')
     parser.add_argument('--path', type=str, default="", 
                       help='wav生成目录')
     
     args = parser.parse_args()
+
+    print(f"{args.error_rate},", end="")
     
     try:
         # 计算并打印PESQ分数
         pesq_score = calculate_pesq(args.reference, args.test, args.sample_rate)
-        print(f"PESQ分数: {pesq_score:.3f}")
+        print(f"{pesq_score:.3f}", end="")
+    except Exception as e:
+        print(f"计算失败: {str(e)}")
+
+    try:
+        # 计算并打印PESQ分数
+        pesq_score = calculate_pesq(args.reference, args.test2, args.sample_rate)
+        print(f",{pesq_score:.3f}")
     except Exception as e:
         print(f"计算失败: {str(e)}")
