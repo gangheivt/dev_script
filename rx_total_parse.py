@@ -218,14 +218,16 @@ def parse_file(input_txt, output_csv):
                 words = re.split(r'[,\s]+', line)
                 current_total = int(words[3])
                 current_error = int(words[4])
-                current_ok = current_total - current_error
-                if ((current_total-last_total)==0):
-                    print("afh_sco_data_stats: line",line_number, current_total, last_total )
+                if (last_total>0):
+                    current_ok = current_total - current_error                
+                    if ((current_total-last_total)>0):
+                        afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
+                    print("afh_sco_data_stats: line",line_number, current_error-last_error, current_total-last_total )
+                    print("afh_error_rate: ", afh_error_rate*100, current_total-last_total)
+                    afh_cnt_delta=current_total-last_total
+                    afh_ok_cnt_delta= current_ok - last_ok
                 else:
-                    afh_error_rate=float(current_error-last_error)/float(current_total-last_total)
-                print("afh_error_rate: ", afh_error_rate*100, current_total-last_total)
-                afh_cnt_delta=current_total-last_total
-                afh_ok_cnt_delta= current_ok - last_ok
+                    current_ok=0;
                 last_total=current_total
                 last_error=current_error    
                 last_ok=current_ok
@@ -1487,23 +1489,31 @@ if __name__ == "__main__":
             
     # 转换为表格数据
     table_data = []
+    rx_total_all = 0
+    rx_ok_all = 0
+    rx_audio_ok_all = 0
     for item in channel_stats_array._array:
         channel=item['channel']
         rx_ok = item['rx_ok']
+        rx_ok_all += rx_ok
         total = item['total']    
+        rx_total_all += total
+        audio_ok=item['rx_audio_ok'] 
+        rx_audio_ok_all += audio_ok
         # 处理除零情况
         if total == 0:
             success_rate = "N/A"  # 或者 0.0%
         else:
             success_rate = f"{rx_ok / total:.2%}"
-        table_data.append([f"{channel}", f"{rx_ok}", f"{total}", success_rate])
+        table_data.append([f"{channel}", f"{rx_ok}",  f"{total}", success_rate])
     # 使用 tabulate 打印表格
     print(tabulate(
         table_data,
-        headers=["Channel","RX OK", "Total", "Success Rate"],
+        headers=["Channel","RX OK",  "Total", "Success Rate"],
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
+    print("Average OK rate  %.4f%%" %(rx_ok_all/rx_total_all*100.0))
     
     total_error_rate=0
     total_cnt=0
