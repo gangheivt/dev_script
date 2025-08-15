@@ -21,6 +21,7 @@ static void g711plc_copyf(Float *f, Float *t, int cnt);
 static void g711plc_copys(short *f, short *t, int cnt);
 static void g711plc_zeros(short *s, int cnt);
 
+#define G711_ATT_FADE_COUNT   10
 void msbc_g711plc_construct(LowcFE_c *lc)
 {
     lc->pitch_min = 40 * 2;      /* minimum allowed pitch, 200 Hz */
@@ -75,7 +76,7 @@ void cvsd_g711plc_construct(LowcFE_c *lc)
     lc->framesz     80      /* 10 msec at 8khz */
 #endif
 
-    lc->attenfac = ((Float).2);     /* attenuation factor per 10ms frame */
+    lc->attenfac = ((Float)1.0/G711_ATT_FADE_COUNT);     /* attenuation factor per 10ms frame */
     lc->attenincr = (lc->attenfac / lc->framesz);      /* attenuation per sample */
     assert(lc->historylen <= HISTORYLEN_MAX);
     assert(lc->poverlapmax <= POVERLAPMAX_);
@@ -167,7 +168,7 @@ void g711plc_dofe(LowcFE_c *lc, short *out)
         g711plc_overlapadds(tmp, out, out, lc->poverlap);
         g711plc_scalespeech(lc, out);
     }
-    else if (lc->erasecnt > 5)
+    else if (lc->erasecnt > G711_ATT_FADE_COUNT)
     {
         g711plc_zeros(out, lc->framesz);
     }
