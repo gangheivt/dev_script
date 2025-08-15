@@ -137,11 +137,55 @@ bool init_wav_input(const char* wav_path) {
 
     if (memcmp(header.riff, "RIFF", 4) != 0 ||
         memcmp(header.wave, "WAVE", 4) != 0 ||
-        memcmp(header.fmt, "fmt ", 4) != 0 ||
-        memcmp(header.data, "data", 4) != 0) {
+        memcmp(header.fmt, "fmt ", 4) != 0 
+)   {
         printf("Not a valid WAV file\n");
         fclose(wav_file);
         return false;
+    }
+
+    // 验证基本WAV标识后，检查数据块
+    if (memcmp(header.data, "data", 4) != 0) {
+        // 如果不是data块，检查是否是LIST块
+        if (memcmp(header.data, "LIST", 4) == 0) {
+            printf("Found LIST chunk, skipping...\n");
+            // 计算LIST块大小并跳过
+            unsigned int list_size = header.data_size;
+            if (fseek(wav_file, list_size, SEEK_CUR) != 0) {
+                printf("Failed to skip LIST chunk\n");
+                fclose(wav_file);
+                wav_file = NULL;
+                return false;
+            }
+            // 寻找后续的data块
+            char chunk_id[4];
+            unsigned int chunk_size;
+            while (fread(chunk_id, 1, 4, wav_file) == 4 &&
+                fread(&chunk_size, 4, 1, wav_file) == 1) {
+                if (memcmp(chunk_id, "data", 4) == 0) {
+                    // 找到数据块，更新数据大小
+                    header.data_size = chunk_size;
+                    break;
+                }
+                else {
+                    // 跳过其他未知块
+                    fseek(wav_file, chunk_size, SEEK_CUR);
+                }
+            }
+            if (memcmp(chunk_id, "data", 4) != 0) {
+                printf("No data chunk found in WAV file\n");
+                fclose(wav_file);
+                wav_file = NULL;
+                return false;
+            }
+        }
+        else {
+            printf("Invalid chunk after fmt: %c%c%c%c\n",
+                header.data[0], header.data[1], header.data[2], header.data[3]);
+            fclose(wav_file);
+            wav_file = NULL;
+            return false;
+        }
     }
 
     if (header.audio_format != 1 || header.bits_per_sample != 16) {
@@ -399,7 +443,7 @@ int16_t ref_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 };    // 参考音频
 int16_t with_plc_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 有PLC
 int16_t without_plc_pcm[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 无PLC
 int16_t with_plc_pcm_g711[TOTAL_FRAMES * FRAME_SIZE] = { 0 }; // 有PLC
-
+extern int fading_count;
 
 int main(int argc, char * argv[]) 
 {
@@ -414,14 +458,16 @@ int main(int argc, char * argv[])
     int16_t* raw_pcm_buf = malloc(MAX_RAW_SAMPLES * sizeof(int16_t));
     int16_t* mono_pcm_buf = malloc(MAX_RAW_SAMPLES * sizeof(int16_t));
 
-    cvsd_g711plc_construct(&g711_lpc);
-
     if (argc > 1) {
         rate = atoi(argv[1]);
         if (rate>100 || rate<0)
             printf("Lost rate must between 0-100\n");
         else
             printf("Lost rate %d%%\n", rate);
+        if (argc > 2) {
+            fading_count = atoi(argv[2]);
+        }
+        printf("Fading rate %.2f%%\n", 1.0f / fading_count * 100.0f);
     }
     else {
         printf("Usage: plc <lost rate in percentage>\n");
@@ -432,6 +478,8 @@ int main(int argc, char * argv[])
         printf("Memory allocation failed\n");
         return 1;
     }
+
+    cvsd_g711plc_construct(&g711_lpc);
 
     srand((unsigned int)time(NULL));
 
