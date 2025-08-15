@@ -21,7 +21,7 @@ static void g711plc_copyf(Float *f, Float *t, int cnt);
 static void g711plc_copys(short *f, short *t, int cnt);
 static void g711plc_zeros(short *s, int cnt);
 
-#define G711_ATT_FADE_COUNT   10
+#define G711_ATT_FADE_COUNT   5
 void msbc_g711plc_construct(LowcFE_c *lc)
 {
     lc->pitch_min = 40 * 2;      /* minimum allowed pitch, 200 Hz */
