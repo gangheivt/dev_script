@@ -523,6 +523,8 @@ class ChannelStatsArray:
             if (total_cnt>0):
                 combined_avg_mw = total_mw / total_cnt
                 combined_avg_dbm = 10 * math.log10(combined_avg_mw)
+                if (combined_avg_dbm> -10):
+                    return -70
                 return combined_avg_dbm
             else:
                 return -70
@@ -1586,11 +1588,13 @@ if __name__ == "__main__":
     for i in error_rate_sorted:
         total_error_rate+=(i.error_rate*i.cnt)
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
-        total_scan_mw += (10 ** (i.scan / 10)) * i.cnt
+        if (i.scan<0):
+            total_scan_mw += (10 ** (i.scan / 10)) * i.cnt
+        else:
+            print("???? ", i.rssi)
         total_arith_rssi += i.arith_rssi * i.cnt
         total_arith_scan += i.arith_scan * i.cnt
         total_cnt+=i.cnt
-    print("Average error rate %.4f%%" %(total_error_rate/total_cnt*100.0))
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
     combined_scan_mw = total_scan_mw / total_cnt
@@ -1624,6 +1628,6 @@ if __name__ == "__main__":
         rx_hist_max=RX_HISTORY_MAX
     )    
     # Start the visualization
-    tracker.start_visualization()
+    #tracker.start_visualization()
 
     
