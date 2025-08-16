@@ -10,7 +10,7 @@ from tabulate import tabulate
 # Summry only contain MIN_RSSI_THRESHOLD <= RSSI <= MAX_RSSI_THRESHOLD
 MAX_RSSI_THRESHOLD = 0
 MIN_RSSI_THRESHOLD = -120
-RX_HISTORY_MAX=1600
+RX_HISTORY_MAX=2000
 
 afh_group=0
 afh_group_count=0
