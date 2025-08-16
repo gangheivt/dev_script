@@ -30,11 +30,14 @@ sf_stats_array=[]
 sf_stats_rssi_hist=[]
 
 class error_rate_cls:
-    def __init__(self, rssi, error_rate, ok_cnt, cnt):
+    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan):
         self.rssi = rssi
+        self.arith_rssi = arith_rssi
         self.error_rate = error_rate
         self.ok_cnt = ok_cnt
+        self.scan = scan
         self.cnt=cnt
+        self.arith_scan=arith_scan
     
     def __lt__(self, other):
         return self.rssi < other.rssi
@@ -378,6 +381,7 @@ class ChannelStatsArray:
         return {
             "channel": channel,
             "rssi": 0,
+            "total_rssi": 0,
             "valid_rssi_cnt": 0,
             "inv_rssi_cnt": 0,
             "rx_ok": 0,
@@ -401,6 +405,7 @@ class ChannelStatsArray:
                     stats["rssi"] = item.rssi
                 else:
                     stats["rssi"] = update_average_dbm(stats["rssi"], stats["valid_rssi_cnt"], item.rssi, 1)
+                stats["total_rssi"] += item.rssi
                 stats["valid_rssi_cnt"] += 1
             else:
                 stats["inv_rssi_cnt"] += 1
@@ -508,6 +513,57 @@ class ChannelStatsArray:
             stats = self.get(channel)
             return stats["rssi"]
 
+    def get_scan_rssi(self, channel: int) -> float:
+        if (channel<0):
+            total_mw=0
+            total_cnt=0
+            for i in self._array:
+                total_mw += (10 ** (i["scan"] / 10)) * i["valid_rssi_cnt"]
+                total_cnt += i["valid_rssi_cnt"]
+            if (total_cnt>0):
+                combined_avg_mw = total_mw / total_cnt
+                combined_avg_dbm = 10 * math.log10(combined_avg_mw)
+                return combined_avg_dbm
+            else:
+                return -70
+        else:
+            stats = self.get(channel)
+            return stats["scan"]
+
+    def get_arith_scan(self, channel: int) -> float:
+        if (channel<0):
+            total_scan=0
+            total_cnt=0
+            for i in self._array:
+                total_scan += i["scan"] * i["valid_rssi_cnt"]
+                total_cnt += i["valid_rssi_cnt"]
+            if (total_cnt>0):
+                print("get_arith_scan:", total_scan/total_cnt)
+                return total_scan/total_cnt
+            else:
+                return -70
+        else:
+            stats = self.get(channel)
+            return stats["scan"]
+
+    def get_arith_rssi(self, channel: int) -> float:
+        """计算指定信道的平均 RSSI"""
+        if (channel<0):
+            total_rssi=0
+            total_cnt=0
+            for i in self._array:
+                total_rssi += i["total_rssi"]
+                total_cnt += i["valid_rssi_cnt"]
+            if (total_cnt>0):    
+                return total_rssi/total_cnt
+            else:
+                return -70
+        else:
+            stats = self.get(channel)
+            if (stats["valid_rssi_cnt"]>0):
+                return stats["total_rssi"]/stats["valid_rssi_cnt"]
+            else:
+                return -70
     def get_rx_ok_total(self, channel: int) -> int:
         if (channel<0):
             total_cnt=0
@@ -693,6 +749,7 @@ class ChannelStatsArray:
         current = self._array[channel]
         if (overwrite==True):
             current["rssi"] = history_stats['rssi']
+            current["total_rssi"] = history_stats["total_rssi"]
             current["valid_rssi_cnt"] = history_stats["valid_rssi_cnt"]
             current["inv_rssi_cnt"] = history_stats["inv_rssi_cnt"]
             current["rx_ok"] = history_stats["rx_ok"]
@@ -702,6 +759,7 @@ class ChannelStatsArray:
             current["total"] = history_stats["total"]
         else:
             current["rssi"] = update_average_dbm(current["rssi"],current["valid_rssi_cnt"],history_stats['rssi'],history_stats["valid_rssi_cnt"])
+            current["total_rssi"] += history_stats["total_rssi"]
             current["valid_rssi_cnt"] += history_stats["valid_rssi_cnt"]
             current["inv_rssi_cnt"] += history_stats["inv_rssi_cnt"]
             current["rx_ok"] += history_stats["rx_ok"]
@@ -1077,8 +1135,11 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     global error_rate_stat
     stat_rssi=stats_array.get_average_rssi(-1)
     ok_cnt=stats_array.get_rx_ok_total(-1)
+    arith_rssi=stats_array.get_arith_rssi(-1)
+    scan_rssi=stats_array.get_scan_rssi(-1)
+    arith_scan=stats_array.get_arith_scan(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD:
-        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta)]
+        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1513,19 +1574,35 @@ if __name__ == "__main__":
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
+    print("------------------------------------------------------------------")
     print("Average OK rate  %.4f%%" %(rx_ok_all/rx_total_all*100.0))
     
     total_error_rate=0
     total_cnt=0
     total_mw=0
+    total_scan_mw=0
+    total_arith_rssi=0
+    total_arith_scan=0
     for i in error_rate_sorted:
         total_error_rate+=(i.error_rate*i.cnt)
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
+        total_scan_mw += (10 ** (i.scan / 10)) * i.cnt
+        total_arith_rssi += i.arith_rssi * i.cnt
+        total_arith_scan += i.arith_scan * i.cnt
         total_cnt+=i.cnt
     print("Average error rate %.4f%%" %(total_error_rate/total_cnt*100.0))
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
+    combined_scan_mw = total_scan_mw / total_cnt
+    combined_avg_scan_dbm = 10 * math.log10(combined_scan_mw)
+    print("------------------------------------------------------------------")
     print("Average RSSI %.4fdbm" %(combined_avg_dbm))
+    print("Mid RSSI %.4fdbm" %(error_rate_sorted[len(error_rate_sorted)>>1].rssi))
+    print("Average arithmetic RSSI %.4fdbm" %(total_arith_rssi/total_cnt))
+    print("------------------------------------------------------------------")
+
+    print("Average scan RSSI %.4fdbm" %(combined_avg_scan_dbm))
+    print("Average arith scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
 
     
     # Visualize the data
