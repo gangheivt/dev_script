@@ -1604,9 +1604,12 @@ if __name__ == "__main__":
     print("Mid RSSI %.4fdbm" %(error_rate_sorted[len(error_rate_sorted)>>1].rssi))
     print("Average arithmetic RSSI %.4fdbm" %(total_arith_rssi/total_cnt))
     print("------------------------------------------------------------------")
-
     print("Average scan RSSI %.4fdbm" %(combined_avg_scan_dbm))
     print("Average arith scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
+    print("------------------------------------------------------------------")
+    print("Error rate:%.4f" %(total_error_rate/total_cnt))
+    print("Sinr:%.2f" %(combined_avg_dbm-combined_avg_scan_dbm))
+    print("Arith Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
 
     
     # Visualize the data
