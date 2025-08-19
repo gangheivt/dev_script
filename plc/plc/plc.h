@@ -47,7 +47,7 @@ bool is_unvoiced(const int16_t* frame, float* spectral_flatness);
 void add_comfort_noise(int16_t* pcm, const AudioFrame* history);
 void noise_shaping(int16_t* pcm_frame, FFTHandler* fft_handler, const AudioFrame* history);
 void conceal_lost_frame(AudioFrame* output, const AudioFrame* history, int loss_count);
-void plc_process(AudioFrame* output, const AudioFrame* history, bool is_lost, int loss_count);
+
 FFTHandler* fft_init(int size);
 void fft_execute(FFTHandler* handler, float* buffer, bool inverse);
 void fft_cleanup(FFTHandler* handler);

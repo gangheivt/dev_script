@@ -1,4 +1,4 @@
-/*************************************************************
+﻿/*************************************************************
 SBC Example PLC ANSI-C Source Code
 File: sbcplc.c
 *************************************************************/
@@ -35,13 +35,8 @@ void msbc_g711plc_construct(LowcFE_c *lc)
     lc->corrbuflen = (lc->corrlen + lc->pitch_max);   /* correlation buffer length */
     lc->corrminpower = ((float)250. * 2);   /* minimum power */
 
-#if 1
     lc->eoverlapincr = 24 * 2;      /* end ola increment per frame, 3ms */
     lc->framesz = 60 * 2;      /* 7.5 msec at 8khz */
-#else
-    lc->eoverlapincr    32      /* end ola increment per frame, 4ms */
-    lc->framesz     80      /* 10 msec at 8khz */
-#endif
 
     lc->attenfac = ((float).2);     /* attenuation factor per 10ms frame */
     lc->attenincr = (lc->attenfac / lc->framesz);      /* attenuation per sample */
@@ -68,14 +63,8 @@ void cvsd_g711plc_construct(LowcFE_c *lc)
     lc->corrlen = 160;     /* 20 msec correlation length */
     lc->corrbuflen = (lc->corrlen + lc->pitch_max);   /* correlation buffer length */
     lc->corrminpower = ((Float)250.);   /* minimum power */
-
-#if 1
     lc->eoverlapincr = 24;      /* end ola increment per frame, 3ms */
     lc->framesz = 60;      /* 7.5 msec at 8khz */
-#else
-    lc->eoverlapincr    32      /* end ola increment per frame, 4ms */
-    lc->framesz     80      /* 10 msec at 8khz */
-#endif
 
     lc->attenfac = ((Float)1.0/fading_count);     /* attenuation factor per 10ms frame */
     lc->attenincr = (lc->attenfac / lc->framesz);      /* attenuation per sample */
@@ -88,7 +77,71 @@ void cvsd_g711plc_construct(LowcFE_c *lc)
     lc->erasecnt = 0;
     lc->pitchbufend = &lc->pitchbuf[lc->historylen];
     g711plc_zeros(lc->history, lc->historylen);
+
+#ifdef G711_ADAPTIVE_PLC
+    /* 感知加权初始化 */
+    lc->alpha = 0.7f;
+    memset(lc->lpc_coeff, 0, sizeof(lc->lpc_coeff));
+    lc->prev_energy = -99.0f;
+#endif
+
+    /* 状态初始化 */
+    lc->erasecnt = 0;
+    lc->pitchbufend = &lc->pitchbuf[lc->historylen];
+    g711plc_zeros(lc->history, lc->historylen);
 }
+
+#ifdef G711_ADAPTIVE_PLC
+//==================================================================
+// 核心信号处理函数（带自适应加权）
+//==================================================================
+static void apply_perceptual_weight(short* frame, int size, LowcFE_c* lc) {
+    /* 基于LPC的前向加权滤波：W(z) = 1/(1 - α*A(z)) */
+    for (int i = 0; i < size; i++) {
+        float weighted = frame[i];
+
+        // LPC加权滤波（10阶）
+        for (int j = 1; j <= LPC_ORDER && i - j >= 0; j++) {
+            weighted -= lc->alpha * lc->lpc_coeff[j] * frame[i - j];
+        }
+
+        // 限幅处理
+        frame[i] = (short)fmaxf(fminf(weighted, 32767), -32768);
+    }
+}
+
+
+static void lpc_analysis(short* frame, int size, float* coeff) {
+    float autocorr[LPC_ORDER + 1] = { 0 };
+
+    // 1. 计算自相关函数
+    for (int lag = 0; lag <= LPC_ORDER; lag++) {
+        for (int i = 0; i < size - lag; i++) {
+            autocorr[lag] += (float)frame[i] * frame[i + lag];
+        }
+    }
+
+    // 2. Levinson-Durbin递归
+    float err = autocorr[0];
+    coeff[0] = 1.0f;
+
+    for (int k = 1; k <= LPC_ORDER; k++) {
+        // 计算反射系数
+        float lambda = 0.0f;
+        for (int m = 1; m < k; m++) {
+            lambda -= coeff[m] * autocorr[k - m];
+        }
+        lambda /= err;
+
+        // 更新系数
+        for (int n = k; n >= 1; n--) {
+            coeff[n] += lambda * coeff[k - n];
+        }
+        err *= (1 - lambda * lambda);
+    }
+}
+#endif
+
 
 /*
  * Get samples from the circular pitch buffer. Update poffset so
@@ -178,6 +231,18 @@ void g711plc_dofe(LowcFE_c *lc, short *out)
         g711plc_getfespeech(lc, out, lc->framesz);
         g711plc_scalespeech(lc, out);
     }
+ 
+ #ifdef G711_ADAPTIVE_PLC
+    /* 新增：CVSD模式动态加权处理 */
+    float current_energy = 10 * log10f(lc->corrminpower + 1e-6f);
+    if (current_energy < -30 && lc->prev_energy < -30) {
+        lc->alpha = 0.5f;  // 低电平增强高频
+    }
+    else if (current_energy > -10 && lc->prev_energy > -10) {
+        lc->alpha = 0.9f;  // 高电平抑制噪声
+    }
+    apply_perceptual_weight(out, lc->framesz, lc);
+#endif
     lc->erasecnt++;
     g711plc_savespeech(lc, out);
 }
@@ -218,6 +283,10 @@ void g711plc_addtohistory(LowcFE_c *lc, short *s)
         g711plc_overlapaddatend(lc, s, overlapbuf, olen);
         lc->erasecnt = 0;
     }
+#ifdef G711_ADAPTIVE_PLC
+    /* 新增：正常帧更新LPC系数 */
+    lpc_analysis(s, lc->framesz, lc->lpc_coeff);
+#endif
     g711plc_savespeech(lc, s);
 }
 
@@ -436,3 +505,4 @@ static void g711plc_zeros(short *s, int cnt)
     for (i = 0; i < cnt; i++)
         s[i] = 0;
 }
+

@@ -209,6 +209,8 @@ int read_wav_8khz(int16_t* output, int max_samples, int16_t* raw_pcm_buf, int16_
 
     static cnt = 0;
     printf("%d", cnt++);
+    if (cnt > 10000)
+        return 0;
     // 读取原始PCM数据（复用预分配缓冲区）
     size_t bytes_read = fread(raw_pcm_buf, sizeof(int16_t), samples_needed * wav_channels, wav_file);
     if (bytes_read < samples_needed * wav_channels) {

@@ -16,6 +16,8 @@
 extern "C" {
 #endif
 
+//#define G711_ADAPTIVE_PLC
+
 #ifdef USEDOUBLES
 typedef double Float;         /* likely to be bit-exact between machines */
 #else
@@ -25,6 +27,8 @@ typedef float Float;
 #define HISTORYLEN_MAX  780
 #define POVERLAPMAX_    60
 #define FRAMESZ_MAX     120
+
+#define LPC_ORDER       10  
 typedef struct _LowcFE_c
 {
     int pitch_min;
@@ -51,6 +55,12 @@ typedef struct _LowcFE_c
     Float pitchbuf[HISTORYLEN_MAX]; /* buffer for cycles of speech */
     Float lastq[POVERLAPMAX_];   /* saved last quarter wavelengh */
     short history[HISTORYLEN_MAX];  /* history buffer */
+#ifdef G711_ADAPTIVE_PLC
+    /* 新增感知加权参数 */
+    float alpha;            // 动态加权系数(0.5-0.9)
+    float lpc_coeff[LPC_ORDER + 1]; // LPC系数(a0=1.0)
+    float prev_energy;      // 前一帧能量(dB)
+#endif
 } LowcFE_c;
 
 /* public functions */
