@@ -30,7 +30,7 @@ sf_stats_array=[]
 sf_stats_rssi_hist=[]
 
 class error_rate_cls:
-    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan):
+    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan, arith_sinr):
         self.rssi = rssi
         self.arith_rssi = arith_rssi
         self.error_rate = error_rate
@@ -38,7 +38,7 @@ class error_rate_cls:
         self.scan = scan
         self.cnt=cnt
         self.arith_scan=arith_scan
-    
+        self.arith_sinr=arith_sinr
     def __lt__(self, other):
         return self.rssi < other.rssi
 
@@ -219,8 +219,14 @@ def parse_file(input_txt, output_csv):
             if "afh_sco_data_stats" in line:
                 global afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta
                 words = re.split(r'[,\s]+', line)
-                current_total = int(words[3])
-                current_error = int(words[4])
+                if ("afh_sco_data_stats"==words[2]):
+                    current_total = int(words[3])
+                    current_error = int(words[4])
+                elif ("afh_sco_data_stats"==words[4]):
+                    current_total = int(words[5])
+                    current_error = int(words[6])                    
+                else:
+                    print("Wrong format for afh_sco_data_stats")
                 if (last_total>0):
                     current_ok = current_total - current_error                
                     if ((current_total-last_total)>0):
@@ -390,6 +396,7 @@ class ChannelStatsArray:
             "score": 0,
             "total": 0,
             "scan" : 0,
+            "sinr" : 0,
             "rx_hist" : [],
             "ttl":DEFAULT_TTL
         }
@@ -406,7 +413,10 @@ class ChannelStatsArray:
                 else:
                     stats["rssi"] = update_average_dbm(stats["rssi"], stats["valid_rssi_cnt"], item.rssi, 1)
                 stats["total_rssi"] += item.rssi
+                if (sf_scaned_chn[channel]<0):
+                    stats["sinr"]=(stats["sinr"]*stats["valid_rssi_cnt"]+item.rssi-sf_scaned_chn[channel])/(stats["valid_rssi_cnt"]+1)
                 stats["valid_rssi_cnt"] += 1
+                
             else:
                 stats["inv_rssi_cnt"] += 1
             
@@ -547,7 +557,21 @@ class ChannelStatsArray:
         else:
             stats = self.get(channel)
             return stats["scan"]
-
+    def get_arith_sinr(self, channel: int) -> float:
+        if (channel<0):
+            total_sinr=0
+            total_cnt=0            
+            for i in self._array:
+                total_sinr += i["sinr"] * i["valid_rssi_cnt"]
+                total_cnt += i["valid_rssi_cnt"]
+            if (total_cnt>0):
+                print("get_arith_sinr:", total_sinr/total_cnt)
+                return total_sinr/total_cnt
+            else:
+                return -70
+        else:
+            stats = self.get(channel)
+            return stats["sinr"]        
     def get_arith_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
         if (channel<0):
@@ -1140,8 +1164,9 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     arith_rssi=stats_array.get_arith_rssi(-1)
     scan_rssi=stats_array.get_scan_rssi(-1)
     arith_scan=stats_array.get_arith_scan(-1)
+    arith_sinr=stats_array.get_arith_sinr(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD:
-        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan)]
+        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1527,14 +1552,14 @@ if __name__ == "__main__":
     error_rate_sorted = sorted(error_rate_stat, key=lambda p: p.rssi)
     # 转换为表格数据
     table_data = [
-        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.ok_cnt}", f"{item.cnt}"]
+        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.ok_cnt}", f"{item.cnt}", f"{item.arith_sinr}"]
             for item in error_rate_sorted
     ]
 
     # 使用 tabulate 打印表格
     print(tabulate(
         table_data,
-        headers=["RSSI (dBm)", "Error Rate", "rx_ok", "cnt"],
+        headers=["RSSI (dBm)", "Error Rate", "rx_ok", "cnt", "Sinr"],
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
@@ -1585,6 +1610,7 @@ if __name__ == "__main__":
     total_scan_mw=0
     total_arith_rssi=0
     total_arith_scan=0
+    total_arith_sinr=0
     for i in error_rate_sorted:
         total_error_rate+=(i.error_rate*i.cnt)
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
@@ -1594,6 +1620,7 @@ if __name__ == "__main__":
             print("???? ", i.rssi)
         total_arith_rssi += i.arith_rssi * i.cnt
         total_arith_scan += i.arith_scan * i.cnt
+        total_arith_sinr += i.arith_sinr * i.cnt
         total_cnt+=i.cnt
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
@@ -1610,7 +1637,7 @@ if __name__ == "__main__":
     print("Error rate:%.4f" %(total_error_rate/total_cnt))
     print("Sinr:%.2f" %(combined_avg_dbm-combined_avg_scan_dbm))
     print("Arith Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
-
+    print("Active Arith Sinr: %.2f" %(total_arith_sinr/total_cnt))
     
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
@@ -1631,6 +1658,6 @@ if __name__ == "__main__":
         rx_hist_max=RX_HISTORY_MAX
     )    
     # Start the visualization
-    #tracker.start_visualization()
+    tracker.start_visualization()
 
     
