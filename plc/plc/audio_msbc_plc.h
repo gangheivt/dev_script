@@ -16,8 +16,6 @@
 extern "C" {
 #endif
 
-//#define G711_ADAPTIVE_PLC
-
 #ifdef USEDOUBLES
 typedef double Float;         /* likely to be bit-exact between machines */
 #else
@@ -28,7 +26,33 @@ typedef float Float;
 #define POVERLAPMAX_    60
 #define FRAMESZ_MAX     120
 
-#define LPC_ORDER       10  
+#define G711_ATT_FADE_COUNT   10
+// 改进功能开关
+//#define G711_ADAPTIVE_PLC    // 启用自适应感知加权
+#define COMFORT_NOISE        // 启用舒适噪声生成
+#define NONLINEAR_ATTEN      // 启用非线性衰减
+
+// 新增常量定义
+#define LPC_ORDER           8
+#define NOISE_HISTORY       32   // 噪声分析历史帧数
+#define COMFORT_NOISE_START 30   // 300ms后启用舒适噪声（30帧*10ms）
+#define CNG_GAIN_SCALE      0.2f // 舒适噪声增益缩放因子
+
+
+// 舒适噪声生成器结构体 [5](@ref)
+typedef struct {
+    float lpc_coeff[LPC_ORDER];   // LPC系数
+    float energy_history[NOISE_HISTORY]; // 历史能量缓存
+    float noise_floor;            // 噪声基底能量
+    int hist_index;               // 历史缓存索引
+} ComfortNoiseGenerator;
+
+// 基音候选结构（多候选检测）
+typedef struct {
+    float corr;
+    int index;
+} PitchCandidate;
+
 typedef struct _LowcFE_c
 {
     int pitch_min;
@@ -55,12 +79,13 @@ typedef struct _LowcFE_c
     Float pitchbuf[HISTORYLEN_MAX]; /* buffer for cycles of speech */
     Float lastq[POVERLAPMAX_];   /* saved last quarter wavelengh */
     short history[HISTORYLEN_MAX];  /* history buffer */
+
 #ifdef G711_ADAPTIVE_PLC
-    /* 新增感知加权参数 */
-    float alpha;            // 动态加权系数(0.5-0.9)
-    float lpc_coeff[LPC_ORDER + 1]; // LPC系数(a0=1.0)
-    float prev_energy;      // 前一帧能量(dB)
+    float alpha;                  // 动态感知加权系数 [3](@ref)
+    float prev_energy;            // 前一帧能量(dB)
+    int last_pitch;               // 历史基音周期（连续性校验）
 #endif
+    ComfortNoiseGenerator cng;    // 舒适噪声生成器
 } LowcFE_c;
 
 /* public functions */

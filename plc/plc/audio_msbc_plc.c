@@ -7,6 +7,7 @@ File: sbcplc.c
 #include "audio_msbc_plc.h"
 #include "assert.h"
 #include "stdlib.h"
+#include "memory.h"
 
 static void g711plc_scalespeech(LowcFE_c *, short *out);
 static void g711plc_getfespeech(LowcFE_c *, short *out, int sz);
@@ -21,7 +22,21 @@ static void g711plc_copyf(Float *f, Float *t, int cnt);
 static void g711plc_copys(short *f, short *t, int cnt);
 static void g711plc_zeros(short *s, int cnt);
 
-#define G711_ATT_FADE_COUNT   10
+/* 新增优化函数声明 */
+#ifdef G711_ADAPTIVE_PLC
+static void apply_perceptual_weight(short* frame, int size, LowcFE_c* lc, float alpha);
+static void lpc_analysis(short* frame, int size, float* coeff);
+static inline float compute_dynamic_alpha(float current_energy, float prev_energy, float prev_alpha);
+#endif
+#ifdef NONLINEAR_ATTEN
+static void nonlinear_attenuation(short* out, int sz, int erasecnt, int pitch);
+#endif
+#ifdef COMFORT_NOISE
+static void generate_comfort_noise(ComfortNoiseGenerator* cng, short* out, int sz);
+#endif
+static int enhanced_findpitch(LowcFE_c* lc);
+static void dynamic_overlapaddatend(LowcFE_c* lc, short* s, short* f, int cnt);
+
 int fading_count = G711_ATT_FADE_COUNT;
 void msbc_g711plc_construct(LowcFE_c *lc)
 {
@@ -49,6 +64,20 @@ void msbc_g711plc_construct(LowcFE_c *lc)
     lc->erasecnt = 0;
     lc->pitchbufend = &lc->pitchbuf[lc->historylen];
     g711plc_zeros(lc->history, lc->historylen);
+
+    // 新增优化初始化
+#ifdef G711_ADAPTIVE_PLC
+    lc->alpha = 0.75f;
+    lc->prev_energy = -99.0f;
+    lc->last_pitch = (lc->pitch_min + lc->pitch_max) / 2; // 默认基音
+    memset(lc->cng.lpc_coeff, 0, sizeof(lc->cng.lpc_coeff));
+#endif
+#ifdef COMFORT_NOISE
+    lc->cng.noise_floor = 300.0f; // 初始噪声基底
+    lc->cng.hist_index = 0;
+    memset(lc->cng.energy_history, 0, sizeof(lc->cng.energy_history));
+#endif
+
 }
 
 
@@ -78,37 +107,21 @@ void cvsd_g711plc_construct(LowcFE_c *lc)
     lc->pitchbufend = &lc->pitchbuf[lc->historylen];
     g711plc_zeros(lc->history, lc->historylen);
 
+    // 新增优化初始化
 #ifdef G711_ADAPTIVE_PLC
-    /* 感知加权初始化 */
-    lc->alpha = 0.7f;
-    memset(lc->lpc_coeff, 0, sizeof(lc->lpc_coeff));
+    lc->alpha = 0.75f;
     lc->prev_energy = -99.0f;
+    lc->last_pitch = 80; // 默认基音周期
+    memset(lc->cng.lpc_coeff, 0, sizeof(lc->cng.lpc_coeff));
+#endif
+#ifdef COMFORT_NOISE
+    lc->cng.noise_floor = 500.0f; // 初始噪声基底
+    lc->cng.hist_index = 0;
+    memset(lc->cng.energy_history, 0, sizeof(lc->cng.energy_history));
 #endif
 
-    /* 状态初始化 */
-    lc->erasecnt = 0;
-    lc->pitchbufend = &lc->pitchbuf[lc->historylen];
-    g711plc_zeros(lc->history, lc->historylen);
 }
 
-#ifdef G711_ADAPTIVE_PLC
-//==================================================================
-// 核心信号处理函数（带自适应加权）
-//==================================================================
-static void apply_perceptual_weight(short* frame, int size, LowcFE_c* lc) {
-    /* 基于LPC的前向加权滤波：W(z) = 1/(1 - α*A(z)) */
-    for (int i = 0; i < size; i++) {
-        float weighted = frame[i];
-
-        // LPC加权滤波（10阶）
-        for (int j = 1; j <= LPC_ORDER && i - j >= 0; j++) {
-            weighted -= lc->alpha * lc->lpc_coeff[j] * frame[i - j];
-        }
-
-        // 限幅处理
-        frame[i] = (short)fmaxf(fminf(weighted, 32767), -32768);
-    }
-}
 
 
 static void lpc_analysis(short* frame, int size, float* coeff) {
@@ -140,8 +153,210 @@ static void lpc_analysis(short* frame, int size, float* coeff) {
         err *= (1 - lambda * lambda);
     }
 }
+
+#ifdef G711_ADAPTIVE_PLC
+// 动态α计算（平滑过渡）
+static inline float compute_dynamic_alpha(float current_energy, float prev_energy, float prev_alpha) {
+    float target_alpha;
+
+    if (current_energy < -30.0f && prev_energy < -30.0f)
+        target_alpha = 0.65f;  // 低电平适当提升高频
+    else if (current_energy > -10.0f && prev_energy > -10.0f)
+        target_alpha = 0.85f;   // 高电平抑制噪声
+    else
+        target_alpha = 0.75f;  // 默认值
+
+    // 每帧最大变化0.05，避免突变
+    if (fabs(target_alpha - prev_alpha) > 0.05f) {
+        if (target_alpha > prev_alpha)
+            return prev_alpha + 0.05f;
+        else
+            return prev_alpha - 0.05f;
+    }
+    return target_alpha;
+}
+
+// 感知加权滤波（动态α）[3](@ref)
+static void apply_perceptual_weight(short* frame, int size, LowcFE_c* lc, float alpha) {
+    /* 基于LPC的前向加权滤波：W(z) = 1/(1 - α*A(z)) */
+    for (int i = 0; i < size; i++) {
+        float weighted = frame[i];
+
+        // LPC加权滤波（8阶）
+        for (int j = 1; j <= LPC_ORDER && i - j >= 0; j++) {
+            weighted -= alpha * lc->cng.lpc_coeff[j] * frame[i - j];
+        }
+
+        // 限幅处理
+        frame[i] = (short)fmaxf(fminf(weighted, 32767), -32768);
+    }
+}
+
+// 多候选基音检测（抗噪+连续性优化）
+static int enhanced_findpitch(LowcFE_c* lc) {
+
+    Float* l = lc->pitchbufend - lc->corrlen;  // 当前分析段
+    Float* r = lc->pitchbufend - lc->corrbuflen; // 历史缓冲区
+    PitchCandidate candidates[3] = { {-1e9, 0}, {-1e9, 0}, {-1e9, 0} };
+
+    // === 粗搜索：以ndec步长遍历基音范围 ===
+    for (int j = 0; j <= lc->pitchdiff; j += lc->ndec) {
+        Float energy = 0.0f;
+        Float corr = 0.0f;
+
+        // 计算当前偏移的能量和互相关
+        for (int i = 0; i < lc->corrlen; i++) {
+            energy += r[j + i] * r[j + i];
+            corr += r[j + i] * l[i];
+        }
+
+        // 归一化互相关（NCCF）抗噪处理[4](@ref)
+        Float nccf = (corr * corr) / (energy + 1e-6f);
+
+        // 更新Top3候选
+        if (nccf > candidates[0].corr) {
+            candidates[2] = candidates[1];
+            candidates[1] = candidates[0];
+            candidates[0] = (PitchCandidate){ nccf, j };
+        }
+        else if (nccf > candidates[1].corr) {
+            candidates[2] = candidates[1];
+            candidates[1] = (PitchCandidate){ nccf, j };
+        }
+        else if (nccf > candidates[2].corr) {
+            candidates[2] = (PitchCandidate){ nccf, j };
+        }
+    }
+
+    // === 细搜索：最佳候选附近精细扫描 ===
+    int best_match = candidates[0].index;
+    Float best_corr = candidates[0].corr;
+    int search_start = best_match - (lc->ndec - 1);
+    int search_end = best_match + (lc->ndec - 1);
+
+    // 边界保护
+    if (search_start < 0) search_start = 0;
+    if (search_end > lc->pitchdiff) search_end = lc->pitchdiff;
+
+    for (int j = search_start; j <= search_end; j++) {
+        Float energy = 0.0f;
+        Float corr = 0.0f;
+
+        for (int i = 0; i < lc->corrlen; i++) {
+            energy += r[j + i] * r[j + i];
+            corr += r[j + i] * l[i];
+        }
+
+        Float nccf = (corr * corr) / (energy + 1e-6f);
+        if (nccf > best_corr) {
+            best_corr = nccf;
+            best_match = j;
+        }
+    }
+
+    // === 历史连续性校验（避免基音跳变） ===
+    int final_pitch = lc->pitch_max - best_match;
+    for (int i = 0; i < 3; i++) {
+        int candidate_pitch = lc->pitch_max - candidates[i].index;
+        // 偏差<5%历史基音则优先选择[1](@ref)
+        if (abs(candidate_pitch - lc->last_pitch) < 0.05 * lc->last_pitch) {
+            final_pitch = candidate_pitch;
+            break;
+        }
+    }
+
+    // 动态容差阈值：根据能量变化率调整
+    float current_energy = 10 * log10f(lc->corrminpower + 1e-6f);
+    float energy_diff = (float)fabs(current_energy - lc->prev_energy);
+    float threshold = (energy_diff > 10.0f) ? 0.15f : 0.05f;  // 高动态段放宽至15%
+
+    for (int i = 0; i < 3; i++) {
+        int candidate_pitch = lc->pitch_max - candidates[i].index;
+        // 使用动态阈值校验
+        if (abs(candidate_pitch - lc->last_pitch) < threshold * lc->last_pitch) {
+            final_pitch = candidate_pitch;
+            break;
+        }
+    }
+
+    lc->last_pitch = final_pitch;  // 更新历史基音
+    return final_pitch;
+}
 #endif
 
+// 非线性衰减（分段策略）[3](@ref)
+#ifdef NONLINEAR_ATTEN
+static void nonlinear_attenuation(short* out, int sz, int erasecnt, int pitch) {
+    float g = 1.0f;
+    if (erasecnt <= 5) {
+        g = 1.0f - 0.02f * erasecnt;
+    }
+    else {
+        g = 0.9f * powf(0.88f, (float)(erasecnt - 5)); // 减缓衰减速度
+    }
+
+    // 基频谐波补偿（抑制金属声）
+    for (int i = 0; i < sz; i++) {
+        float sample = out[i] * g;
+        // 仅在基频有效时补偿（pitch>0）
+        if (pitch > 0 && i % pitch < pitch / 4) {
+            sample *= 1.1f; // 增强基频能量
+        }
+        out[i] = (short)fmaxf(fminf(sample, 32767), -32768);
+    }
+}
+#endif
+
+
+// 舒适噪声生成（LPC建模）[5](@ref)
+#ifdef COMFORT_NOISE
+static void generate_comfort_noise(ComfortNoiseGenerator* cng, short* out, int sz) {
+    // 1. 从历史噪声中提取LPC系数
+    lpc_analysis(out, sz, cng->lpc_coeff); // 使用当前缓冲区分析
+
+    // 2. 生成高斯白噪声
+    for (int i = 0; i < sz; i++) {
+        float noise = ((rand() / (float)RAND_MAX) * 2.0f - 1.0f) * cng->noise_floor;
+
+        // 3. LPC滤波重构背景声
+        for (int j = 1; j < LPC_ORDER; j++) {
+            if (i >= j) noise += cng->lpc_coeff[j] * out[i - j];
+        }
+        out[i] = (short)(noise * CNG_GAIN_SCALE);
+    }
+}
+#endif
+
+
+// 动态OLA窗口（相位对齐）[1](@ref)
+static void dynamic_overlapaddatend(LowcFE_c* lc, short* s, short* f, int cnt) {
+    // 根据丢包时长扩展窗口（最长20ms）
+    int dynamic_olen = lc->poverlap + (lc->erasecnt * 8);
+    if (dynamic_olen > cnt) dynamic_olen = cnt;
+    if (dynamic_olen > 160) dynamic_olen = 160; // 20ms限制
+
+    // 执行带相位对齐的OLA
+    Float incr = (Float)1.0 / (dynamic_olen - lc->sbcrt);
+    Float gain = (Float)1.0 - (lc->erasecnt - 1) * lc->attenfac;
+    if (gain < 0.) gain = (Float)0.;
+    Float incrg = incr * gain;
+    Float lw = ((Float)1.0 - incr) * gain;
+    Float rw = incr;
+
+    // 起始段：完全使用合成信号
+    for (int i = 0; i < lc->sbcrt; i++) {
+        Float t = gain * f[i];
+        s[i] = (short)t;
+    }
+
+    // 重叠段：渐变混合
+    for (int i = lc->sbcrt; i < dynamic_olen; i++) {
+        Float t = lw * f[i] + rw * s[i];
+        s[i] = (short)fmaxf(fminf(t, 32767.0f), -32768.0f);
+        lw -= incrg;
+        rw += incr;
+    }
+}
 
 /*
  * Get samples from the circular pitch buffer. Update poffset so
@@ -186,11 +401,17 @@ static void g711plc_scalespeech(LowcFE_c *lc, short *out)
  */
 void g711plc_dofe(LowcFE_c *lc, short *out)
 {
+    float current_energy = 10 * log10f(lc->corrminpower + 1e-6f);
+
     if (lc->erasecnt == 0)
     {
         /* get history */
         g711plc_convertsf(lc->history, lc->pitchbuf, lc->historylen);
-        lc->pitch = g711plc_findpitch(lc); /* find pitch */
+#ifdef G711_ADAPTIVE_PLC
+        lc->pitch = enhanced_findpitch(lc); /* find pitch */
+#else
+        lc->pitch = g711plc_findpitch(lc);
+#endif
         lc->poverlap = lc->pitch >> 2;      /* OLA 1/4 wavelength */
         /* save original last poverlap samples */
         g711plc_copyf(lc->pitchbufend - lc->poverlap, lc->lastq, lc->poverlap);
@@ -202,7 +423,18 @@ void g711plc_dofe(LowcFE_c *lc, short *out)
         g711plc_convertfs(lc->pitchbufend - lc->poverlap, &lc->history[lc->historylen - lc->poverlap], lc->poverlap);
         /* get synthesized speech */
         g711plc_getfespeech(lc, out, lc->framesz);
+        // 记录当前能量用于动态α
+#ifdef G711_ADAPTIVE_PLC
+        lc->cng.energy_history[lc->cng.hist_index] = current_energy;
+        lc->cng.hist_index = (lc->cng.hist_index + 1) % NOISE_HISTORY;
+#endif
     }
+#ifdef COMFORT_NOISE
+    else if (lc->erasecnt > COMFORT_NOISE_START) {
+        // 长丢包切换舒适噪声
+        generate_comfort_noise(&lc->cng, out, lc->framesz);
+    }
+#else
     else if (lc->erasecnt == 1 || lc->erasecnt == 2)
     {
         /* tail of previous pitch estimate */
@@ -226,22 +458,33 @@ void g711plc_dofe(LowcFE_c *lc, short *out)
     {
         g711plc_zeros(out, lc->framesz);
     }
+#endif
     else
     {
+        // 常规合成帧处理
         g711plc_getfespeech(lc, out, lc->framesz);
+
+#ifdef G711_ADAPTIVE_PLC
+        float energy_diff = (float)fabs(current_energy - lc->prev_energy);
+        // 能量突变>10dB时跳过自适应处理（保护瞬态信号）
+        if (energy_diff < 10.0f) {
+            lc->alpha = compute_dynamic_alpha(current_energy, lc->prev_energy, lc->alpha);
+            apply_perceptual_weight(out, lc->framesz, lc, lc->alpha);
+        }
+#endif
+
+#ifdef NONLINEAR_ATTEN
+        // 非线性衰减替代线性衰减
+        nonlinear_attenuation(out, lc->framesz, lc->erasecnt, lc->pitch);
+#else
+        // 保留原始衰减
         g711plc_scalespeech(lc, out);
+#endif
     }
  
  #ifdef G711_ADAPTIVE_PLC
     /* 新增：CVSD模式动态加权处理 */
-    float current_energy = 10 * log10f(lc->corrminpower + 1e-6f);
-    if (current_energy < -30 && lc->prev_energy < -30) {
-        lc->alpha = 0.5f;  // 低电平增强高频
-    }
-    else if (current_energy > -10 && lc->prev_energy > -10) {
-        lc->alpha = 0.9f;  // 高电平抑制噪声
-    }
-    apply_perceptual_weight(out, lc->framesz, lc);
+    lc->prev_energy = current_energy;
 #endif
     lc->erasecnt++;
     g711plc_savespeech(lc, out);
@@ -279,13 +522,19 @@ void g711plc_addtohistory(LowcFE_c *lc, short *s)
         int olen = lc->poverlap + (lc->erasecnt + 1 - 1) * lc->eoverlapincr + lc->sbcrt;
         if (olen > lc->framesz)
             olen = lc->framesz;
+#ifdef G711_ADAPTIVE_PLC
+        // 使用动态OLA
+        g711plc_getfespeech(lc, overlapbuf, olen);
+        dynamic_overlapaddatend(lc, s, overlapbuf, olen);
+#else
         g711plc_getfespeech(lc, overlapbuf, olen);
         g711plc_overlapaddatend(lc, s, overlapbuf, olen);
+#endif
         lc->erasecnt = 0;
     }
-#ifdef G711_ADAPTIVE_PLC
-    /* 新增：正常帧更新LPC系数 */
-    lpc_analysis(s, lc->framesz, lc->lpc_coeff);
+#if defined(G711_ADAPTIVE_PLC)||defined(COMFORT_NOISE)
+    // 正常帧更新LPC系数
+    lpc_analysis(s, lc->framesz, lc->cng.lpc_coeff);
 #endif
     g711plc_savespeech(lc, s);
 }
@@ -468,6 +717,7 @@ static int g711plc_findpitch(LowcFE_c *lc)
             bestmatch = j;
         }
     }
+
     return lc->pitch_max - bestmatch;
 }
 
