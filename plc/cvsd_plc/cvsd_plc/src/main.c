@@ -8,6 +8,7 @@
 
 int g_total = 0;
 int g_error = 0;
+int g_error1 = 0;
 
 typedef struct audio_cvsd_tag
 {
@@ -128,7 +129,7 @@ void process_block(const unsigned char* in, size_t in_len, unsigned char* out, s
     assert((header & 0xFF) == 0x3c);
     assert(((header >> 24) & 0xFF) == 1);
     g_total++;
-    if (((header >> 8) & 0xFF) == 0)
+    if (((header >> 8) & 0xFF)<=0)
     {
         //audio_dump_data_align_size(ADUMP_DOWNLINK, &p_sco_data->data[0], 60);
         memmove(g_audio_cvsd_env.out_buf, (int16_t*)(g_audio_cvsd_env.out_buf + g_audio_cvsd_env.out_len_interpolate), FIR_FILTER_LENGTH * sizeof(int16_t));
@@ -141,6 +142,14 @@ void process_block(const unsigned char* in, size_t in_len, unsigned char* out, s
         //decimation_x8(g_audio_cvsd_env.out_buf, g_audio_cvsd_env.out_len_interp_FIR_assumpt, g_audio_cvsd_env.decimate_buf, BT_CVSD_FRAME_LEN);
         decimation_x8(g_audio_cvsd_env.out_buf, g_audio_cvsd_env.out_len_interp_FIR_assumpt, (int16_t*)&out[0], BT_CVSD_FRAME_LEN);
         //audio_dump_data_align_size(ADUMP_DOWNLINK_AGC, &p_sco_data->data[0], 120);
+
+        extern void g711plc_apply_filter(LowcFE_c * lc, short* s, int update);
+        if (((header >> 8) & 0xFF) == 1) {
+            g_error1++;
+            g711plc_apply_filter(&g_plc, (short*)(&out[0]), 1);
+        }
+        else
+            g711plc_apply_filter(&g_plc, (short*)(&out[0]), 0);
         g711plc_addtohistory(&g_plc, (short*)(&out[0]));
     }
     else
@@ -258,7 +267,7 @@ int main(int argc, char* argv[]) {
     fclose(fin);
     fclose(fout);
     fclose(fout2);
-    printf("total:%d,error:%d,per:%f\n", g_total, g_error, (float)g_error * 100 / g_total);
+    printf("total:%d,error:%d, error1:%d, per:%.2f, crc per %.2f\n", g_total, g_error, g_error1, (float)g_error * 100 / g_total, (float)g_error1 * 100 / g_total);
     printf("size %d Done.\n", data_size);
     return 0;
 }
