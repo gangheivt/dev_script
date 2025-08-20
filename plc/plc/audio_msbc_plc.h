@@ -28,7 +28,7 @@ typedef float Float;
 
 #define G711_ATT_FADE_COUNT   10
 // 改进功能开关
-//#define G711_ADAPTIVE_PLC    // 启用自适应感知加权
+// #define G711_ADAPTIVE_PLC    // 启用自适应感知加权
 #define COMFORT_NOISE        // 启用舒适噪声生成
 #define NONLINEAR_ATTEN      // 启用非线性衰减
 
@@ -80,11 +80,9 @@ typedef struct _LowcFE_c
     Float lastq[POVERLAPMAX_];   /* saved last quarter wavelengh */
     short history[HISTORYLEN_MAX];  /* history buffer */
 
-#ifdef G711_ADAPTIVE_PLC
     float alpha;                  // 动态感知加权系数 [3](@ref)
     float prev_energy;            // 前一帧能量(dB)
     int last_pitch;               // 历史基音周期（连续性校验）
-#endif
     ComfortNoiseGenerator cng;    // 舒适噪声生成器
 } LowcFE_c;
 
