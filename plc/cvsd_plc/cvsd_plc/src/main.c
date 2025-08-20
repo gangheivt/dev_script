@@ -129,7 +129,7 @@ void process_block(const unsigned char* in, size_t in_len, unsigned char* out, s
     assert((header & 0xFF) == 0x3c);
     assert(((header >> 24) & 0xFF) == 1);
     g_total++;
-    if (((header >> 8) & 0xFF)<=0)
+    if (((header >> 8) & 0xFF)<=1)
     {
         //audio_dump_data_align_size(ADUMP_DOWNLINK, &p_sco_data->data[0], 60);
         memmove(g_audio_cvsd_env.out_buf, (int16_t*)(g_audio_cvsd_env.out_buf + g_audio_cvsd_env.out_len_interpolate), FIR_FILTER_LENGTH * sizeof(int16_t));

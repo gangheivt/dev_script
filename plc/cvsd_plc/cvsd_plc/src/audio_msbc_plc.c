@@ -578,9 +578,16 @@ void g711plc_apply_filter(LowcFE_c* lc, short* s, int update)
 
     for (int i = 0; i < lc->framesz; i++) {
         // 原始信号作为“测量值”输入卡尔曼滤波器
-        float filtered_sample = kalman_update(&kf, (float)s[i]);
-        if (update)
-            s[i] = (short)filtered_sample; // 更新输出
+        if (fabs(s[i] - s[i - 1]) > 5000.0f && i > 0) {
+            // 瞬态区域直接旁路滤波
+            if (update)
+                s[i] = s[i-1];
+        }
+        else {
+            float filtered_sample = kalman_update(&kf, (float)s[i]);
+            if (update)
+                s[i] = (short)filtered_sample; // 更新输出
+        }
     }
 
     // 可选：动态调整Q/R以适应语音特性
