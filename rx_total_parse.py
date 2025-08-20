@@ -30,7 +30,7 @@ sf_stats_array=[]
 sf_stats_rssi_hist=[]
 
 class error_rate_cls:
-    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan, arith_sinr):
+    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan, arith_sinr, sinr_db):
         self.rssi = rssi
         self.arith_rssi = arith_rssi
         self.error_rate = error_rate
@@ -39,6 +39,7 @@ class error_rate_cls:
         self.cnt=cnt
         self.arith_scan=arith_scan
         self.arith_sinr=arith_sinr
+        self.sinr_db = sinr_db
     def __lt__(self, other):
         return self.rssi < other.rssi
 
@@ -397,6 +398,7 @@ class ChannelStatsArray:
             "total": 0,
             "scan" : 0,
             "sinr" : 0,
+            "sinr_db" : 0,
             "rx_hist" : [],
             "ttl":DEFAULT_TTL
         }
@@ -414,7 +416,9 @@ class ChannelStatsArray:
                     stats["rssi"] = update_average_dbm(stats["rssi"], stats["valid_rssi_cnt"], item.rssi, 1)
                 stats["total_rssi"] += item.rssi
                 if (sf_scaned_chn[channel]<0):
-                    stats["sinr"]=(stats["sinr"]*stats["valid_rssi_cnt"]+item.rssi-sf_scaned_chn[channel])/(stats["valid_rssi_cnt"]+1)
+                    sinr=item.rssi-sf_scaned_chn[channel]
+                    stats["sinr"]=(stats["sinr"]*stats["valid_rssi_cnt"]+sinr)/(stats["valid_rssi_cnt"]+1)
+                    stats["sinr_db"] =(stats["sinr_db"]*stats["valid_rssi_cnt"]+(10 ** (sinr/10)))/(stats["valid_rssi_cnt"]+1)
                 stats["valid_rssi_cnt"] += 1
                 
             else:
@@ -571,7 +575,23 @@ class ChannelStatsArray:
                 return -70
         else:
             stats = self.get(channel)
-            return stats["sinr"]        
+            return stats["sinr"]       
+    def get_sinr_db(self, channel: int) -> float:
+        if (channel<0):
+            total_sinr=0
+            total_cnt=0            
+            for i in self._array:
+                total_sinr += i["sinr_db"] * i["valid_rssi_cnt"]
+                total_cnt += i["valid_rssi_cnt"]
+            if (total_cnt>0):
+                print("get_sinr_db:", total_sinr/total_cnt)      
+                return 10 * math.log10(total_sinr/total_cnt)                
+            else:
+                return 0
+        else:
+            stats = self.get(channel)
+            return stats["sinr_db"]   
+            
     def get_arith_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
         if (channel<0):
@@ -1165,8 +1185,9 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     scan_rssi=stats_array.get_scan_rssi(-1)
     arith_scan=stats_array.get_arith_scan(-1)
     arith_sinr=stats_array.get_arith_sinr(-1)
+    sinr_db=stats_array.get_sinr_db(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD:
-        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr)]
+        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1611,9 +1632,11 @@ if __name__ == "__main__":
     total_arith_rssi=0
     total_arith_scan=0
     total_arith_sinr=0
+    total_sinr_db=0
     for i in error_rate_sorted:
         total_error_rate+=(i.error_rate*i.cnt)
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
+        total_sinr_db += (10 ** (i.sinr_db / 10)) * i.cnt
         if (i.scan<0):
             total_scan_mw += (10 ** (i.scan / 10)) * i.cnt
         else:
@@ -1635,9 +1658,8 @@ if __name__ == "__main__":
     print("Average arith scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
     print("------------------------------------------------------------------")
     print("Error rate:%.4f" %(total_error_rate/total_cnt))
-    print("Sinr:%.2f" %(combined_avg_dbm-combined_avg_scan_dbm))
-    print("Arith Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
-    print("Active Arith Sinr: %.2f" %(total_arith_sinr/total_cnt))
+    print("Linear Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
+    print("Sinr_db: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
     
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
