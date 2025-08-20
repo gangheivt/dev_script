@@ -30,7 +30,7 @@ sf_stats_array=[]
 sf_stats_rssi_hist=[]
 
 class error_rate_cls:
-    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan, arith_sinr, sinr_db):
+    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan, arith_sinr, sinr_db, rx_audio_crc_err, rx_total):
         self.rssi = rssi
         self.arith_rssi = arith_rssi
         self.error_rate = error_rate
@@ -40,6 +40,8 @@ class error_rate_cls:
         self.arith_scan=arith_scan
         self.arith_sinr=arith_sinr
         self.sinr_db = sinr_db
+        self.rx_audio_crc_err = rx_audio_crc_err
+        self.rx_total=rx_total
     def __lt__(self, other):
         return self.rssi < other.rssi
 
@@ -395,6 +397,7 @@ class ChannelStatsArray:
             "inv_rssi_cnt": 0,
             "rx_ok": 0,
             "rx_audio_ok": 0,
+            "rx_audio_crc_err": 0,
             "rx_error": 0,
             "score": 0,
             "total": 0,
@@ -433,7 +436,9 @@ class ChannelStatsArray:
                 stats["score"] -= 1
             stats["rx_ok"] += item.rx_ok
             if (item.rx_ok>0 and item.is_audio>0):
-                stats["rx_audio_ok"] += item.rx_ok                
+                stats["rx_audio_ok"] += item.rx_ok
+            elif (item.is_audio>0 and item.crc_err>0):
+                stats["rx_audio_crc_err"] += 1
             stats["rx_error"] += (item.hec_err + 
                                  item.guard_err + item.crc_err + 
                                  item.other_err)
@@ -594,6 +599,26 @@ class ChannelStatsArray:
             stats = self.get(channel)
             return stats["sinr_db"]   
             
+    def get_rx_audio_crc_err(self, channel: int) -> int:
+        if (channel<0):
+            total_crc_err=0
+            for i in self._array:
+                total_crc_err += i["rx_audio_crc_err"]
+            return total_crc_err                
+        else:
+            stats = self.get(channel)
+            return stats["rx_audio_crc_err"]  
+
+    def get_rx_total(self, channel: int) -> int:
+        if (channel<0):
+            rx_total=0
+            for i in self._array:
+                rx_total += i["valid_rssi_cnt"]
+            return rx_total                
+        else:
+            stats = self.get(channel)
+            return stats["valid_rssi_cnt"]  
+        
     def get_arith_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
         if (channel<0):
@@ -643,6 +668,7 @@ class ChannelStatsArray:
         else:
             return DEFAULT_RX_OK_RATE
         return 0
+        
         
     def get_all_channels(self) -> list[dict]:
         """获取所有信道的统计数据"""
@@ -1183,13 +1209,15 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
     global error_rate_stat
     stat_rssi=stats_array.get_average_rssi(-1)
     ok_cnt=stats_array.get_rx_ok_total(-1)
+    rx_audio_crc_err = stats_array.get_rx_audio_crc_err(-1)
     arith_rssi=stats_array.get_arith_rssi(-1)
     scan_rssi=stats_array.get_scan_rssi(-1)
     arith_scan=stats_array.get_arith_scan(-1)
     arith_sinr=stats_array.get_arith_sinr(-1)
     sinr_db=stats_array.get_sinr_db(-1)
+    rx_total = stats_array.get_rx_total(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD:
-        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db)]
+        error_rate_stat += [error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db, rx_audio_crc_err, rx_total)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1643,6 +1671,7 @@ if __name__ == "__main__":
     total_arith_scan=0
     total_arith_sinr=0
     total_sinr_db=0
+    total_rx_audio_crc_err=0
     for i in error_rate_sorted:
         total_error_rate+=(i.error_rate*i.cnt)
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
@@ -1654,6 +1683,7 @@ if __name__ == "__main__":
         total_arith_rssi += i.arith_rssi * i.cnt
         total_arith_scan += i.arith_scan * i.cnt
         total_arith_sinr += i.arith_sinr * i.cnt
+        total_rx_audio_crc_err += i.rx_audio_crc_err
         total_cnt+=i.cnt
     combined_avg_mw = total_mw / total_cnt
     combined_avg_dbm = 10 * math.log10(combined_avg_mw)
@@ -1670,6 +1700,8 @@ if __name__ == "__main__":
     print("Error rate:%.4f" %(total_error_rate/total_cnt))
     print("DB average Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
     print("Linear average: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
+    print("------------------------------------------------------------------")
+    print("Rx audio crc err %d in %d rate:%.2f" %(total_rx_audio_crc_err,total_cnt,total_rx_audio_crc_err/total_cnt))
     
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
