@@ -1658,8 +1658,8 @@ if __name__ == "__main__":
     print("Average arith scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
     print("------------------------------------------------------------------")
     print("Error rate:%.4f" %(total_error_rate/total_cnt))
-    print("Linear Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
-    print("Sinr_db: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
+    print("DB average Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
+    print("Linear average: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
     
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
