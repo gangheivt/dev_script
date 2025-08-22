@@ -596,6 +596,34 @@ void g711plc_apply_filter(LowcFE_c* lc, short* s, int update)
         }
     }
     lc->last_sample = s[lc->framesz-1];
+    if (update) {
+        if (lc->erasecnt == 0) {
+            /* get history */
+            g711plc_convertsf(lc->history, lc->pitchbuf, lc->historylen);
+#ifdef G711_ADAPTIVE_PLC
+            lc->pitch = enhanced_findpitch(lc); /* find pitch */
+#else
+            lc->pitch = g711plc_findpitch(lc);
+#endif
+            lc->poverlap = lc->pitch >> 2;      /* OLA 1/4 wavelength */
+            /* save original last poverlap samples */
+            g711plc_copyf(lc->pitchbufend - lc->poverlap, lc->lastq, lc->poverlap);
+            lc->poffset = 0;            /* create pitch buffer with 1 period */
+            lc->pitchblen = lc->pitch;
+            lc->pitchbufstart = lc->pitchbufend - lc->pitchblen;
+            g711plc_overlapadd(lc->lastq, lc->pitchbufstart - lc->poverlap, lc->pitchbufend - lc->poverlap, lc->poverlap);
+            /* update last 1/4 wavelength in history buffer */
+            g711plc_convertfs(lc->pitchbufend - lc->poverlap, &lc->history[lc->historylen - lc->poverlap], lc->poverlap);
+        }
+#ifdef NONLINEAR_ATTEN
+        // 非线性衰减替代线性衰减
+        nonlinear_attenuation(s, lc->framesz, lc->erasecnt, lc->pitch);
+#else
+        // 保留原始衰减
+        g711plc_scalespeech(lc, out);
+#endif
+        lc->erasecnt++;
+    }
     // 可选：动态调整Q/R以适应语音特性
 #ifdef KALMAN_ADAPTIVE
     adjust_kalman_params(&kf, lc->prev_energy); // 基于能量变化调整Q/R

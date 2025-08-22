@@ -92,7 +92,7 @@ void msbc_g711plc_construct(LowcFE_c *);  /* constructor */
 void cvsd_g711plc_construct(LowcFE_c *);  /* constructor */
 void g711plc_dofe(LowcFE_c *, short *s);     /* synthesize speech for erasure */
 void g711plc_addtohistory(LowcFE_c *, short *s);
-void g711plc_apply_filter(LowcFE_c*, short* s);
+void g711plc_apply_filter(LowcFE_c*, short* s, int update);
 
 /* add a good frame to history buffer */
 

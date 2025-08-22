@@ -16,7 +16,7 @@ afh_group=0
 afh_group_count=0
 afh_error_rate=0.0
 afh_cnt_delta =0
-afh_crc_delta =0
+afh_crc_delta = -1
 afh_ok_cnt_delta = 0
 channel_score_hist=[]
 
@@ -231,7 +231,7 @@ def parse_file(input_txt, output_csv):
                     current_total = int(words[3])
                     current_error = int(words[4])
                     if "plc_afh_sco_data_stats"==words[2]:
-                        current_crc=int(words[5])
+                        current_crc=int(words[5])                        
                 elif ("afh_sco_data_stats"==words[4]):
                     current_total = int(words[5])
                     current_error = int(words[6])                    
@@ -246,7 +246,8 @@ def parse_file(input_txt, output_csv):
                     print("afh_crc_error_rate: ", (current_crc-last_crc)/(current_total-last_total))
                     afh_cnt_delta=current_total-last_total
                     afh_ok_cnt_delta= current_ok - last_ok
-                    afh_crc_delta=current_crc-last_crc
+                    if (current_crc):
+                        afh_crc_delta=current_crc-last_crc
                 else:
                     current_ok=0;
                 last_total=current_total
@@ -1713,8 +1714,10 @@ if __name__ == "__main__":
     print("DB average Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
     print("Linear average: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
     print("------------------------------------------------------------------")
-    print("Rx audio crc err %d in %d rate:%.2f%%" %(total_crc_err,total_cnt,total_crc_err/total_cnt*100))
-    
+    if (total_crc_err>=0):
+        print("Rx audio crc err %d in %d rate:%.2f%%" %(total_crc_err,total_cnt,total_crc_err/total_cnt*100))
+    else:
+        print("Rx audio crc err N/A")   
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
     
