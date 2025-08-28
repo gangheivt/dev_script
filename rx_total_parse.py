@@ -322,9 +322,11 @@ def parse_file(input_txt, output_csv):
                 elif "D/HEX all_rssi2:" in line:
                     tag=15                         
                 elif "D/HEX ble_rxall:" in line:
-                    tag=16                    
-                else:
+                    tag=16       
+                elif "D/HEX ble_ch_map:" in line:
                     tag=17
+                else:
+                    tag=18
                     unknown=1
                 if (unknown==0):
                     print("Processing block ", line_number, tag)
@@ -530,16 +532,16 @@ class ChannelStatsArray:
         rssi = sf_scaned_chn
         
         # Generate Actual RSSI values (-95 to -30 dBm)
-        act_rssi = [0] * 80        
+        act_rssi = [0] * (MAX_CHANNELS+1)
         for i in self._array:
             act_rssi[i['channel']]=int(i['rssi'])
 
         # Generate success counts (0-15)
-        successes = [0] * 80        
+        successes = [0] *  (MAX_CHANNELS+1)        
         for i in self._array:
             successes[i['channel']]=i['rx_ok']
         # Generate failure counts (0-5)
-        failures = [0] * 80
+        failures = [0] *  (MAX_CHANNELS+1)
         for i in self._array:
             failures[i['channel']]=i['valid_rssi_cnt']-i['rx_ok']
 
@@ -1509,11 +1511,12 @@ def process_ch_scan(data_bytes, type=1, tag=4):
                 val=max(val1,val2,val3,val4)    
                 if (tag==14):
                     val=max(val,val5,val6,val7,val8)    
-        scaned_chn.append(val)        
+        scaned_chn.append(val)    
     sf_scaned_chn = [int(x) for x in scaned_chn]
-    sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
-    sf_scaned_chn[1]=sf_scaned_chn[2]
-    sf_scaned_chn[25]=sf_scaned_chn[26]    
+    if (MAX_CHANNELS>40):
+        sf_scaned_chn = [elem for elem in sf_scaned_chn for _ in range(2)]
+        sf_scaned_chn[1]=sf_scaned_chn[2]
+        sf_scaned_chn[25]=sf_scaned_chn[26]    
     sf_scaned_chns += [sf_scaned_chn]
     
 def hex_to_bytes(hex_input):
@@ -1559,13 +1562,29 @@ def process_afh(data_bytes):
 
 def process_afh_map(data_bytes):
     global afh_ch_map
-    afh_ch_map = [0] * 80        
+    afh_ch_map = [0] * (MAX_CHANNELS+1)        
     for i in range(10):
         temp=data_bytes[i+4]
         temp=int(temp, 16)
         for j in range(8):
             if not ((temp & (1<<j)) == 0):
                 afh_ch_map[i*8+j]=1;        
+
+def process_ble_ch_map(data_bytes):
+    global afh_ch_map
+    afh_ch_map = [0] * (MAX_CHANNELS+1)        
+    for i in range(5):
+        temp=data_bytes[i]
+        temp=int(temp, 16)
+        for j in range(8):
+            if not ((temp & (1<<j)) == 0):
+                index=i*8+j
+                if (index<11):
+                    index=index+1
+                elif (index<37):
+                    index=index+2                    
+                afh_ch_map[index]=1;        
+
                 
 def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     """处理一个完整数据块并写入CSV"""
@@ -1621,6 +1640,9 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         expected_bytes = 2 + total_groups * 6
         # 跳过前2个组数字节，从第3个字节开始
         data_bytes = bytes_list[2:expected_bytes]
+    elif (tag==17):             # ble_ch_map    
+        expected_bytes = 5
+        data_bytes = bytes_list
     else:
         unknown=1
         expected_bytes = 10000
@@ -1642,6 +1664,8 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         process_afh_map(data_bytes)
     elif (tag==16):
         process_ble_rx_total(data_bytes,writer, timestr_in_line)
+    elif (tag==17):
+        process_ble_ch_map(data_bytes)
     
                 
 last_removed = []
@@ -1800,6 +1824,10 @@ if __name__ == "__main__":
     parser.add_argument('--isble', action='store_true', 
                       default=False,  # 显式设置默认值为False
                       help='启用文件处理功能（默认不启用）')
+    # 添加参数
+    parser.add_argument('--figure', action='store_true', 
+                      default=False,  # 显式设置默认值为False
+                      help='启用Matlab画图（默认不启用）')
     # input参数默认为argv[1]，如果未提供则使用位置参数
     parser.add_argument('input', nargs='?', default=None,
                       help='输入文件路径（默认为第一个位置参数）')
@@ -1860,10 +1888,10 @@ if __name__ == "__main__":
         stat=channel_stats_array._array[j];
         stat["channel"] = j
         for i in sf_stats_array:
-            act_rssi=get_signed_byte(i,80+j)
+            act_rssi=get_signed_byte(i, (MAX_CHANNELS+1)+j)
             if (act_rssi<= MAX_RSSI_THRESHOLD and act_rssi >= MIN_RSSI_THRESHOLD):
-                stat["rx_ok"] += i[160+j]
-                stat["total"] += i[160+j]+i[240+j]
+                stat["rx_ok"] += i[(MAX_CHANNELS+1)*2+j]
+                stat["total"] += i[(MAX_CHANNELS+1)*2+j]+i[(MAX_CHANNELS+1)*3+j]
             
     # 转换为表格数据
     table_data = []
@@ -1942,20 +1970,19 @@ if __name__ == "__main__":
     # Create and run the tracker
     print("Starting visualization...")
     
-    if (MAX_CHANNELS>40):   
-        tracker = RSSISuccessTracker(
-            byte_arrays=sf_stats_array,
-            num_channels=(MAX_CHANNELS+1),
-            int_format='b',
-            db_min=-100,
-            db_max=-30,
-            db_step=5,
-            delta_min=-40,
-            delta_max=40,        
-            count_max=20,
-            rx_hist_max=RX_HISTORY_MAX
-        )    
-        
+    tracker = RSSISuccessTracker(
+        byte_arrays=sf_stats_array,
+        num_channels=(MAX_CHANNELS+1),
+        int_format='b',
+        db_min=-100,
+        db_max=-30,
+        db_step=5,
+        delta_min=-40,
+        delta_max=40,        
+        count_max=20,
+        rx_hist_max=RX_HISTORY_MAX
+    )    
+    if (args.figure):
         #Start the visualization
         tracker.start_visualization()
 
