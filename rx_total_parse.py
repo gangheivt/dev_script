@@ -1,7 +1,9 @@
 import csv
 import re
+import argparse
 import sys
 import math
+
 from dataclasses import dataclass
 from collections import defaultdict
 from typing import List, Optional, Union
@@ -11,6 +13,7 @@ from tabulate import tabulate
 MAX_RSSI_THRESHOLD = 0
 MIN_RSSI_THRESHOLD = -120
 RX_HISTORY_MAX=2000
+MAX_CHANNELS=79
 
 afh_group=0
 afh_group_count=0
@@ -46,6 +49,24 @@ class error_rate_cls:
         self.crc_error=crc_error
     def __lt__(self, other):
         return self.rssi < other.rssi
+
+class ble_error_rate_cls:
+    def __init__(self, rssi, error_rate, ok_cnt, cnt, arith_rssi, scan, arith_scan, arith_sinr, sinr_db, ble_rx_err, rx_total,crc_error ):
+        self.rssi = rssi
+        self.arith_rssi = arith_rssi
+        self.error_rate = error_rate
+        self.ok_cnt = ok_cnt
+        self.scan = scan
+        self.cnt=rx_total
+        self.arith_scan=arith_scan
+        self.arith_sinr=arith_sinr
+        self.sinr_db = sinr_db
+        self.ble_rx_err = ble_rx_err
+        self.rx_total=rx_total
+        self.crc_error=crc_error
+    def __lt__(self, other):
+        return self.rssi < other.rssi
+
 
 def get_signed_byte(byte_array, index):
     """
@@ -220,8 +241,12 @@ def parse_file(input_txt, output_csv):
     index=1
     with open(input_txt, 'r') as infile, open(output_csv, 'w', newline='') as outfile:
         writer = csv.writer(outfile)
-        writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
-        
+        if MAX_CHANNELS>40:
+            writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok', 'sync_err', 'hec_err', 'guard_err', 'crc_err', 'others'])  # CSV头部
+        else:
+            writer.writerow(['index', 'afh_group' , 'index_range', 'time', 'channel', 'freq', 'rssi', 'is_auio', 'rx_ok',
+                'sync_err', 'rx_time_err', 'len_err', 'crc_err', 'mic_err', 'llid_err', 'sn_err', 'nesn_err'])  # CSV头部
+            
         for line_number, line in enumerate(infile, start = 1):
                
             if "afh_sco_data_stats" in line or "plc_afh_sco_data_stats" in line:
@@ -260,6 +285,7 @@ def parse_file(input_txt, output_csv):
                 if (active_block):
                     process_block(collected_bytes, total_groups, writer, timestr_in_line, tag)
                 # 结束前一个块（如果未完成）
+                unknown=0
                 if "D/HEX rx total:" in line:
                     print("Mark Line ", line_number, ", Index ", index)
                     index+=1
@@ -295,12 +321,13 @@ def parse_file(input_txt, output_csv):
                     tag=14                         
                 elif "D/HEX all_rssi2:" in line:
                     tag=15                         
+                elif "D/HEX ble_rxall:" in line:
+                    tag=16                    
                 else:
-                    tag=16
-                    
-                
-                    
-                print("Processing block ", line_number, tag)
+                    tag=17
+                    unknown=1
+                if (unknown==0):
+                    print("Processing block ", line_number, tag)
                 
                 # 开始新数据块
                 active_block = True
@@ -375,6 +402,23 @@ class channel_assess:
     guard_err: int
     crc_err: int
     other_err: int
+    
+@dataclass
+class ble_channel_assess:
+    channel: int
+    afh_group: int
+    timestr_in_line: str
+    rssi: int
+    is_audio: int
+    rx_ok: int
+    sync_err: int
+    rx_time_err: int
+    len_err: int
+    crc_err: int
+    mic_err: int
+    llid_err: int
+    sn_err: int
+    nesn_err: int    
 
 class ChannelStatsArray:
     """基于信道编号索引的固定大小统计数组"""
@@ -450,9 +494,12 @@ class ChannelStatsArray:
                 stats["rx_audio_ok"] += item.rx_ok
             elif (item.is_audio>0 and item.crc_err>0):
                 stats["rx_audio_crc_err"] += 1
-            stats["rx_error"] += (item.hec_err + 
+            if (self._max_channel>40):
+                stats["rx_error"] += (item.hec_err + 
                                  item.guard_err + item.crc_err + 
                                  item.other_err)
+            else:
+                stats["rx_error"] +=  item.sync_err+item.rx_time_err+item.len_err+item.crc_err+item.mic_err+item.llid_err+item.sn_err+item.nesn_err                  
             stats["total"] += 1                     
         else:
             raise IndexError(f"Channel {channel} out of range [0, {self._max_channel}]")
@@ -569,8 +616,9 @@ class ChannelStatsArray:
             total_scan=0
             total_cnt=0
             for i in self._array:
-                total_scan += i["scan"] * i["valid_rssi_cnt"]
-                total_cnt += i["valid_rssi_cnt"]
+                if (i["scan"]<0):
+                    total_scan += i["scan"] * i["valid_rssi_cnt"]
+                    total_cnt += i["valid_rssi_cnt"]
             if (total_cnt>0):
                 print("get_arith_scan:", total_scan/total_cnt)
                 return total_scan/total_cnt
@@ -602,7 +650,7 @@ class ChannelStatsArray:
                 total_sinr += i["sinr_db"] * i["valid_rssi_cnt"]
                 total_cnt += i["valid_rssi_cnt"]
             if (total_cnt>0 and total_sinr>0):
-                print("get_sinr_db:", total_sinr/total_cnt)      
+                print("get_sinr_db:", math.log10(total_sinr/total_cnt))      
                 return 10 * math.log10(total_sinr/total_cnt)                
             else:
                 return 0
@@ -619,7 +667,15 @@ class ChannelStatsArray:
         else:
             stats = self.get(channel)
             return stats["rx_audio_crc_err"]  
-
+    def get_ble_rx_ok(self, channel: int) -> int:
+        if (channel<0):
+            total_rx_ok=0
+            for i in self._array:
+                total_rx_ok += i["rx_ok"]                
+            return total_rx_ok                
+        else:
+            stats = self.get(channel)
+            return stats["rx_ok"]  
     def get_rx_total(self, channel: int) -> int:
         if (channel<0):
             rx_total=0
@@ -1124,6 +1180,129 @@ class ChannelStatsArray:
         print(json.dumps(output, indent=2))
 
         
+def process_ble_rx_total(data_bytes, writer, timestr_in_line):
+    channels=[]
+    global group_counter, afh_group, afh_group_count
+    global last_array, hist_array, last_removed
+    
+        # 每6字节一组写入CSV
+    for i in range(0, len(data_bytes), 6):
+        if i + 6 > len(data_bytes):
+            break
+            
+        index_range = math.floor(group_counter/10000)
+        channel = int(data_bytes[i+2], 16) & 0x7F;
+        freq = 2402 + channel*2
+        is_audio = (int(data_bytes[i+2], 16)>>7) & 0x1;
+        rssi = int(data_bytes[i], 16) - 255
+        rx_state = int(data_bytes[i+1], 16);
+        rx_ok = 0
+        sync_err = 0
+        rx_time_err = 0
+        len_err = 0
+        crc_err = 0
+        mic_err = 0
+        llid_err =0 
+        sn_err=0
+        nesn_err=0
+        if (rx_state & 0x1) != 0:
+            sync_err = 1
+        elif (rx_state & 0x2) != 0:
+            rx_time_err = 1
+        elif (rx_state & 0x4) != 0:
+            len_err = 1
+        elif (rx_state & 0x8) != 0:
+            crc_err = 1
+        elif (rx_state & 0x10) != 0:
+            mic_err = 1
+        elif (rx_state & 0x20) != 0:
+            llid_err = 1
+        elif (rx_state & 0x40) != 0:
+            sn_err = 1
+        elif (rx_state & 0x80) != 0:
+            nesn_err = 1
+        else:
+            rx_ok = 1
+        afh_group_count=afh_group_count+1
+        writer.writerow([
+            group_counter,
+            afh_group,    
+            index_range,
+            timestr_in_line,
+            channel,
+            freq,
+            rssi,
+            is_audio,
+            rx_ok,
+            sync_err,
+            rx_time_err,
+            len_err,
+            crc_err,
+            mic_err,
+            llid_err,
+            sn_err,
+            nesn_err,
+        ])
+        channels.append(ble_channel_assess(
+            channel,
+            afh_group,
+            timestr_in_line,
+            rssi,
+            is_audio,
+            rx_ok,
+            sync_err,
+            rx_time_err,
+            len_err,
+            crc_err,
+            mic_err,
+            llid_err,
+            sn_err,
+            nesn_err,             
+        ))
+        group_counter += 1
+    
+    stats_array = ChannelStatsArray(max_channel=39)    
+    for i in channels:
+        stats_array.update(i)
+    stats_array.clear_low_access_channels()
+       
+    added_array, removed_array, kept_array=last_array.compare(stats_array)    
+    added_array = sorted(added_array)
+    removed_array = sorted(removed_array)
+    kept_array = sorted(kept_array)
+    print("Evaluate Previous block as Below--------------------")
+    last_array.print_all_with_selected(removed_array, "Removed", detailed=True)
+
+    print("Evaluate Current block as Below--------------------")
+    stats_array.print_stats(detailed=True)
+    
+    global sf_stats_array
+    sf_stats_array+=stats_array.get_success_rate_rssi();
+
+    print("Removed ", end="")
+    print(removed_array)    
+    print("Added with history below: ", end="")
+    print(added_array)
+    hist_array.print_all_with_selected(added_array, "Added", detailed=True, sort_by="scan")
+    print("=======================================================================================")    
+    
+    global error_rate_stat
+    stat_rssi=stats_array.get_average_rssi(-1)
+    ok_cnt=stats_array.get_rx_ok_total(-1)
+    rx_total = stats_array.get_rx_total(-1)
+    rx_error = rx_total-stats_array.get_ble_rx_ok(-1)
+    arith_rssi=stats_array.get_arith_rssi(-1)
+    scan_rssi=stats_array.get_scan_rssi(-1)
+    arith_scan=stats_array.get_arith_scan(-1)
+    arith_sinr=stats_array.get_arith_sinr(-1)
+    sinr_db=stats_array.get_sinr_db(-1)
+    if (afh_cnt_delta<2000) and (afh_cnt_delta>=0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD and rx_total > 0:
+        error_rate_stat += [ble_error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db, rx_error, rx_total, afh_crc_delta)]
+    
+    hist_array.update_from_history(stats_array)
+    last_array=stats_array    
+    last_removed=removed_array
+        
 def process_rx_total(data_bytes, writer, timestr_in_line):
     channels=[]
     global group_counter, afh_group, afh_group_count
@@ -1192,7 +1371,7 @@ def process_rx_total(data_bytes, writer, timestr_in_line):
         ))
         group_counter += 1
     
-    stats_array = ChannelStatsArray(max_channel=79)    
+    stats_array = ChannelStatsArray(max_channel=MAX_CHANNELS)    
     for i in channels:
         stats_array.update(i)
     stats_array.clear_low_access_channels()
@@ -1390,7 +1569,7 @@ def process_afh_map(data_bytes):
                 
 def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
     """处理一个完整数据块并写入CSV"""
-    
+    unknown=0
     # 计算预期总字节数 = 2(组数字节) + total_groups * 4
     if (tag==1):      # 1== 'rx total:' 
         expected_bytes = 2 + total_groups * 4
@@ -1437,11 +1616,16 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         data_bytes = bytes_list    
     elif (tag==15):             # all_rssi2
         expected_bytes = 81
-        data_bytes = bytes_list          
+        data_bytes = bytes_list  
+    elif (tag==16):             # ble_rxall
+        expected_bytes = 2 + total_groups * 6
+        # 跳过前2个组数字节，从第3个字节开始
+        data_bytes = bytes_list[2:expected_bytes]
     else:
+        unknown=1
         expected_bytes = 10000
         
-    if len(bytes_list) < expected_bytes:
+    if len(bytes_list) < expected_bytes and unknown==0 :
         print("Not enought data,", len(bytes_list), "<", expected_bytes)
         expected_bytes=len(bytes_list)
         #return  # 数据不完整    
@@ -1456,11 +1640,10 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         process_afh(data_bytes)
     elif (tag==7):
         process_afh_map(data_bytes)
+    elif (tag==16):
+        process_ble_rx_total(data_bytes,writer, timestr_in_line)
     
-    
-            
-last_array = ChannelStatsArray(max_channel=79)
-hist_array = ChannelStatsArray(max_channel=79)
+                
 last_removed = []
 error_rate_stat = []
 
@@ -1609,34 +1792,71 @@ def visualize_rssi_list(
 
 from rssi_success_rate import  RSSISuccessTracker 
 if __name__ == "__main__":
+
+    # 创建命令行参数解析器
+    parser = argparse.ArgumentParser(description='文件处理工具')
     
-    input_file = sys.argv[1]  # 替换为你的输入文件路径
-    print("input file:", input_file)
-    num = len(sys.argv)
-    if (num >= 3):
-        output_file = sys.argv[2]
+    # 添加参数
+    parser.add_argument('--isble', action='store_true', 
+                      default=False,  # 显式设置默认值为False
+                      help='启用文件处理功能（默认不启用）')
+    # input参数默认为argv[1]，如果未提供则使用位置参数
+    parser.add_argument('input', nargs='?', default=None,
+                      help='输入文件路径（默认为第一个位置参数）')
+    parser.add_argument('--output', type=str, default='result2.csv',
+                      help=f'输出文件路径（默认为result2.csv）')
+    
+    # 解析参数
+    args = parser.parse_args()
+    
+    if (args.isble):
+        MAX_CHANNELS=39
     else:
-        output_file = "result2.csv"  # 替换为你想要的输出文件路径
-    parse_file(input_file, output_file)
-    print(f"处理完成，结果已保存到 {output_file}")
+        MAX_CHANNELS=79    
+    print("MAX_CHANNELS:", MAX_CHANNELS)
+    
+    last_array = ChannelStatsArray(max_channel=MAX_CHANNELS)
+    hist_array = ChannelStatsArray(max_channel=MAX_CHANNELS)
+
+    # 确定输入文件路径：如果未通过位置参数提供，则检查argv[1]
+    input_path = args.input if args.input is not None else (sys.argv[1] if len(sys.argv) > 1 else None)    
+    parse_file(input_path, args.output)
+    
+    print(f"处理完成，结果已保存到 {args.output}")
     error_rate_sorted = sorted(error_rate_stat, key=lambda p: p.rssi)
-    # 转换为表格数据
-    table_data = [
-        [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.ok_cnt}", f"{item.cnt}", f"{item.arith_sinr}"]
-            for item in error_rate_sorted
-    ]
+    
+    if (MAX_CHANNELS>40):
+        # 转换为表格数据
+        table_data = [
+            [f"{item.rssi:.2f}", f"{item.error_rate:.2%}", f"{item.ok_cnt}", f"{item.cnt}", f"{item.arith_sinr:.2f}"]
+                for item in error_rate_sorted
+        ]
 
-    # 使用 tabulate 打印表格
-    print(tabulate(
-        table_data,
-        headers=["RSSI (dBm)", "Error Rate", "rx_ok", "cnt", "Sinr"],
-        tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
-        floatfmt=".2f"
-    ))
+        # 使用 tabulate 打印表格
+        print(tabulate(
+            table_data,
+            headers=["RSSI (dBm)", "Error Rate", "rx_ok", "cnt", "Sinr"],
+            tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
+            floatfmt=".2f"
+        ))
+    else:
+        # 转换为表格数据
+        table_data = [
+            [f"{item.rssi:.2f}", f"{item.cnt}", f"{item.arith_sinr:.2f}"]
+                for item in error_rate_sorted
+        ]
 
+        # 使用 tabulate 打印表格
+        print(tabulate(
+            table_data,
+            headers=["RSSI (dBm)", "cnt", "Sinr"],
+            tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
+            floatfmt=".2f"
+        ))
+        
 
-    channel_stats_array = ChannelStatsArray(max_channel=79)    
-    for j in range(79):
+    channel_stats_array = ChannelStatsArray(max_channel=MAX_CHANNELS)    
+    for j in range(MAX_CHANNELS):
         stat=channel_stats_array._array[j];
         stat["channel"] = j
         for i in sf_stats_array:
@@ -1682,7 +1902,6 @@ if __name__ == "__main__":
     total_arith_scan=0
     total_arith_sinr=0
     total_sinr_db=0
-    total_rx_audio_crc_err=0
     total_crc_err=0
     for i in error_rate_sorted:
         total_error_rate+=(i.error_rate*i.cnt)
@@ -1695,7 +1914,6 @@ if __name__ == "__main__":
         total_arith_rssi += i.arith_rssi * i.cnt
         total_arith_scan += i.arith_scan * i.cnt
         total_arith_sinr += i.arith_sinr * i.cnt
-        total_rx_audio_crc_err += i.rx_audio_crc_err
         total_cnt+=i.cnt
         total_crc_err += i.crc_error
     combined_avg_mw = total_mw / total_cnt
@@ -1721,22 +1939,24 @@ if __name__ == "__main__":
     # Visualize the data
     # visualize_rssi_list(sf_scaned_chns)
     
-        # Create and run the tracker
+    # Create and run the tracker
     print("Starting visualization...")
+    
+    if (MAX_CHANNELS>40):   
+        tracker = RSSISuccessTracker(
+            byte_arrays=sf_stats_array,
+            num_channels=(MAX_CHANNELS+1),
+            int_format='b',
+            db_min=-100,
+            db_max=-30,
+            db_step=5,
+            delta_min=-40,
+            delta_max=40,        
+            count_max=20,
+            rx_hist_max=RX_HISTORY_MAX
+        )    
         
-    tracker = RSSISuccessTracker(
-        byte_arrays=sf_stats_array,
-        num_channels=80,
-        int_format='b',
-        db_min=-100,
-        db_max=-30,
-        db_step=5,
-        delta_min=-40,
-        delta_max=40,        
-        count_max=20,
-        rx_hist_max=RX_HISTORY_MAX
-    )    
-    # Start the visualization
-    tracker.start_visualization()
+        #Start the visualization
+        tracker.start_visualization()
 
     
