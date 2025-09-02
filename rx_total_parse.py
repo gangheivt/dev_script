@@ -322,7 +322,10 @@ def parse_file(input_txt, output_csv):
                 elif "D/HEX all_rssi2:" in line:
                     tag=15                         
                 elif "D/HEX ble_rxall:" in line:
-                    tag=16       
+                    tag=16     
+                    index+=1
+                    afh_group_count=0;
+                    afh_group = afh_group + 1                    
                 elif "D/HEX ble_ch_map:" in line:
                     tag=17
                 else:
@@ -1823,7 +1826,7 @@ if __name__ == "__main__":
     # 添加参数
     parser.add_argument('--isble', action='store_true', 
                       default=False,  # 显式设置默认值为False
-                      help='启用文件处理功能（默认不启用）')
+                      help='启用BLE文件处理功能（默认不启用）')
     # 添加参数
     parser.add_argument('--figure', action='store_true', 
                       default=False,  # 显式设置默认值为False
