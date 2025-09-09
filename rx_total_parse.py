@@ -546,7 +546,7 @@ class ChannelStatsArray:
         # Generate failure counts (0-5)
         failures = [0] *  (MAX_CHANNELS+1)
         for i in self._array:
-            failures[i['channel']]=i['valid_rssi_cnt']-i['rx_ok']
+            failures[i['channel']]=i['total']-i['rx_ok']
 
         # RX RSSI history
         rx_hist = [0] * RX_HISTORY_MAX
@@ -685,11 +685,11 @@ class ChannelStatsArray:
         if (channel<0):
             rx_total=0
             for i in self._array:
-                rx_total += i["valid_rssi_cnt"]
+                rx_total += i["total"]
             return rx_total                
         else:
             stats = self.get(channel)
-            return stats["valid_rssi_cnt"]  
+            return stats["total"]  
         
     def get_arith_rssi(self, channel: int) -> float:
         """计算指定信道的平均 RSSI"""
@@ -1303,7 +1303,8 @@ def process_ble_rx_total(data_bytes, writer, timestr_in_line):
     sinr_db=stats_array.get_sinr_db(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>=0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD and rx_total > 0:
         error_rate_stat += [ble_error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db, rx_error, rx_total, afh_crc_delta)]
-    
+    else:
+        print("??????")
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
     last_removed=removed_array
@@ -1923,7 +1924,7 @@ if __name__ == "__main__":
         floatfmt=".2f"
     ))
     print("------------------------------------------------------------------")
-    print("Average OK rate  %.4f%%" %(rx_ok_all/rx_total_all*100.0))
+    print("Average OK rate  %.4f%%, rx_total=%d" %(rx_ok_all/rx_total_all*100.0, rx_total_all))
     
     total_error_rate=0
     total_cnt=0
@@ -1935,7 +1936,10 @@ if __name__ == "__main__":
     total_sinr_db=0
     total_crc_err=0
     for i in error_rate_sorted:
-        total_error_rate+=(i.error_rate*i.cnt)
+        if (MAX_CHANNELS>40):
+            total_error_rate+=(i.error_rate*i.cnt)
+        else:    
+            total_error_rate+=i.ble_rx_err
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
         total_sinr_db += (10 ** (i.sinr_db / 10)) * i.cnt
         if (i.scan<0):
@@ -1959,7 +1963,7 @@ if __name__ == "__main__":
     print("Average scan RSSI %.4fdbm" %(combined_avg_scan_dbm))
     print("Average arith scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
     print("------------------------------------------------------------------")
-    print("Error rate:%.4f" %(total_error_rate/total_cnt))
+    print("Error rate:%.4f%%, total_cnt %d" %(total_error_rate/total_cnt*100,total_cnt))
     print("DB average Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
     print("Linear average: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
     print("------------------------------------------------------------------")
