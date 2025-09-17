@@ -328,8 +328,10 @@ def parse_file(input_txt, output_csv):
                     afh_group = afh_group + 1                    
                 elif "D/HEX ble_ch_map:" in line:
                     tag=17
+                elif "D/HEX all_rssi6:" in line:
+                    tag=18  
                 else:
-                    tag=18
+                    tag=19
                     unknown=1
                 if (unknown==0):
                     print("Processing block ", line_number, tag)
@@ -1303,8 +1305,7 @@ def process_ble_rx_total(data_bytes, writer, timestr_in_line):
     sinr_db=stats_array.get_sinr_db(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>=0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD and rx_total > 0:
         error_rate_stat += [ble_error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db, rx_error, rx_total, afh_crc_delta)]
-    else:
-        print("??????")
+    
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
     last_removed=removed_array
@@ -1493,6 +1494,9 @@ def process_ch_scan(data_bytes, type=1, tag=4):
             val2 = data_bytes[i + 40]
             val3 = data_bytes[i + 80]
             val4 = data_bytes[i + 120]
+            if (tag==18):
+                val5=data_bytes[i + 160]
+                val6=data_bytes[i + 200]
             if (tag==14):
                 val5=data_bytes[i + 160]
                 val6=data_bytes[i + 200]
@@ -1508,13 +1512,16 @@ def process_ch_scan(data_bytes, type=1, tag=4):
                 else:
                     total_mw += (10 ** (val5 / 10)) 
                     total_mw += (10 ** (val6 / 10)) 
-                    total_mw += (10 ** (val7 / 10)) 
-                    total_mw += (10 ** (val8 / 10)) 
+                    if (tag==14):
+                        total_mw += (10 ** (val7 / 10)) 
+                        total_mw += (10 ** (val8 / 10)) 
                 val=10 * math.log10(total_mw)
             else:
                 val=max(val1,val2,val3,val4)    
                 if (tag==14):
-                    val=max(val,val5,val6,val7,val8)    
+                    val=max(val,val5,val6,val7,val8) 
+                if (tag==18):
+                    val=max(val,val5,val6)     
         scaned_chn.append(val)    
     sf_scaned_chn = [int(x) for x in scaned_chn]
     if (MAX_CHANNELS>40):
@@ -1636,7 +1643,10 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         data_bytes = bytes_list        
     elif (tag==14):             # all_rssi
         expected_bytes = 40 * 8 + 1
-        data_bytes = bytes_list    
+        data_bytes = bytes_list   
+    elif (tag==18):             # all_rssi6
+        expected_bytes = 40 * 6 + 1
+        data_bytes = bytes_list   
     elif (tag==15):             # all_rssi2
         expected_bytes = 81
         data_bytes = bytes_list  
@@ -1660,8 +1670,10 @@ def process_block(bytes_list, total_groups, writer, timestr_in_line, tag=1):
         process_rx_total(data_bytes,writer, timestr_in_line)
     elif (tag==2):
         process_ch_hist(data_bytes)
-    elif (tag==4) or (tag==14) or (tag==15):
-        process_ch_scan(data_bytes,tag=tag)
+    elif (tag==4) or (tag==15):
+        process_ch_scan(data_bytes,type=1,tag=tag)
+    elif (tag==14)or (tag==18):
+        process_ch_scan(data_bytes,type=2,tag=tag)
     elif (tag==5):
         process_afh(data_bytes)
     elif (tag==7):
@@ -1924,7 +1936,7 @@ if __name__ == "__main__":
         floatfmt=".2f"
     ))
     print("------------------------------------------------------------------")
-    print("Average OK rate  %.4f%%, rx_total=%d" %(rx_ok_all/rx_total_all*100.0, rx_total_all))
+    print("Average OK rate  %.4f%%" %(rx_ok_all/rx_total_all*100.0))
     
     total_error_rate=0
     total_cnt=0
@@ -1936,10 +1948,7 @@ if __name__ == "__main__":
     total_sinr_db=0
     total_crc_err=0
     for i in error_rate_sorted:
-        if (MAX_CHANNELS>40):
-            total_error_rate+=(i.error_rate*i.cnt)
-        else:    
-            total_error_rate+=i.ble_rx_err
+        total_error_rate+=(i.error_rate*i.cnt)
         total_mw += (10 ** (i.rssi / 10)) * i.cnt
         total_sinr_db += (10 ** (i.sinr_db / 10)) * i.cnt
         if (i.scan<0):
@@ -1956,16 +1965,16 @@ if __name__ == "__main__":
     combined_scan_mw = total_scan_mw / total_cnt
     combined_avg_scan_dbm = 10 * math.log10(combined_scan_mw)
     print("------------------------------------------------------------------")
-    print("Average RSSI %.4fdbm" %(combined_avg_dbm))
+    print("Average linear RSSI %.4fdbm" %(combined_avg_dbm))
     print("Mid RSSI %.4fdbm" %(error_rate_sorted[len(error_rate_sorted)>>1].rssi))
-    print("Average arithmetic RSSI %.4fdbm" %(total_arith_rssi/total_cnt))
+    print("Average dbm RSSI %.4fdbm" %(total_arith_rssi/total_cnt))
     print("------------------------------------------------------------------")
-    print("Average scan RSSI %.4fdbm" %(combined_avg_scan_dbm))
-    print("Average arith scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
+    print("Average linear scan RSSI %.4fdbm" %(combined_avg_scan_dbm))
+    print("Average dbm scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
     print("------------------------------------------------------------------")
-    print("Error rate:%.4f%%, total_cnt %d" %(total_error_rate/total_cnt*100,total_cnt))
-    print("DB average Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
-    print("Linear average: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
+    print("Error rate:%.4f" %(total_error_rate/total_cnt))
+    print("Average linear sinr: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
+    print("Average db Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
     print("------------------------------------------------------------------")
     if (total_crc_err>=0):
         print("Rx audio crc err %d in %d rate:%.2f%%" %(total_crc_err,total_cnt,total_crc_err/total_cnt*100))
