@@ -1903,12 +1903,24 @@ if __name__ == "__main__":
     for j in range(MAX_CHANNELS):
         stat=channel_stats_array._array[j];
         stat["channel"] = j
+        sinr_db=0
+        sinr_mw=0
         for i in sf_stats_array:
-            act_rssi=get_signed_byte(i, (MAX_CHANNELS+1)+j)
+            scan_rssi=get_signed_byte(i, j)
+            act_rssi=get_signed_byte(i, (MAX_CHANNELS+1)+j)            
+            sinr=(act_rssi-scan_rssi)
             if (act_rssi<= MAX_RSSI_THRESHOLD and act_rssi >= MIN_RSSI_THRESHOLD):
                 stat["rx_ok"] += i[(MAX_CHANNELS+1)*2+j]
-                stat["total"] += i[(MAX_CHANNELS+1)*2+j]+i[(MAX_CHANNELS+1)*3+j]
-            
+                total=i[(MAX_CHANNELS+1)*2+j]+i[(MAX_CHANNELS+1)*3+j]
+                stat["total"] += total
+                sinr_db+=sinr*total
+                sinr_mw+=(10 ** (sinr/10))*total
+        if (stat["total"]>0):        
+            stat['sinr'] = sinr_db/stat["total"] 
+            stat['sinr_db'] = 10 * math.log10(sinr_mw/stat["total"])
+        else:
+            stat['sinr']=0
+            stat['sinr_db'] =0
     # 转换为表格数据
     table_data = []
     rx_total_all = 0
@@ -1922,16 +1934,22 @@ if __name__ == "__main__":
         rx_total_all += total
         audio_ok=item['rx_audio_ok'] 
         rx_audio_ok_all += audio_ok
+        sinr_db_average=item['sinr']
+        sinr_linear_average=item['sinr_db']
         # 处理除零情况
         if total == 0:
             success_rate = "N/A"  # 或者 0.0%
+            sinr_db_average = "N/A"
+            sinr_linear_average = "N/A"
         else:
             success_rate = f"{rx_ok / total:.2%}"
-        table_data.append([f"{channel}", f"{rx_ok}",  f"{total}", success_rate])
+            sinr_db_average=f"{sinr_db_average:.2f}"
+            sinr_linear_average=f"{sinr_linear_average:.2f}"
+        table_data.append([f"{channel}", f"{rx_ok}",  f"{total}", success_rate,sinr_db_average,sinr_linear_average ])
     # 使用 tabulate 打印表格
     print(tabulate(
         table_data,
-        headers=["Channel","RX OK",  "Total", "Success Rate"],
+        headers=["Channel","RX OK",  "Total", "Success Rate", "Sinr db", "Sinr linear"],
         tablefmt="pretty",  # 可选: "plain", "simple", "grid", "fancy_grid", "pipe" 等
         floatfmt=".2f"
     ))
