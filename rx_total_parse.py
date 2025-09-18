@@ -1304,7 +1304,7 @@ def process_ble_rx_total(data_bytes, writer, timestr_in_line):
     arith_sinr=stats_array.get_arith_sinr(-1)
     sinr_db=stats_array.get_sinr_db(-1)
     if (afh_cnt_delta<2000) and (afh_cnt_delta>=0) and stat_rssi <= MAX_RSSI_THRESHOLD and stat_rssi >= MIN_RSSI_THRESHOLD and rx_total > 0:
-        error_rate_stat += [ble_error_rate_cls(stat_rssi,afh_error_rate, afh_ok_cnt_delta, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db, rx_error, rx_total, afh_crc_delta)]
+        error_rate_stat += [ble_error_rate_cls(stat_rssi,rx_error/rx_total, ok_cnt, afh_cnt_delta, arith_rssi, scan_rssi, arith_scan, arith_sinr, sinr_db, rx_error, rx_total, afh_crc_delta)]
     
     hist_array.update_from_history(stats_array)
     last_array=stats_array    
@@ -1990,7 +1990,7 @@ if __name__ == "__main__":
     print("Average linear scan RSSI %.4fdbm" %(combined_avg_scan_dbm))
     print("Average dbm scan RSSI %.4fdbm" %(total_arith_scan/total_cnt))
     print("------------------------------------------------------------------")
-    print("Error rate:%.4f" %(total_error_rate/total_cnt))
+    print("Error rate:%.4f%%" %(total_error_rate/total_cnt*100))
     print("Average linear sinr: %.2f" %(10.0*math.log10(total_sinr_db/total_cnt)))
     print("Average db Sinr:%.2f" %((total_arith_rssi-total_arith_scan)/total_cnt))
     print("------------------------------------------------------------------")
